@@ -17,8 +17,8 @@ const identitySchema = z.strictObject({
 // permanently unreadable; keep a cap above the schema worst case, far below memory risk.
 const MAX_OWNER_BYTES = 32 * 1024;
 type Identity = z.infer<typeof identitySchema>;
-function ownIdentity(directory: string): Identity {
-  const own = ownProcessIdentity();
+async function ownIdentity(directory: string): Promise<Identity> {
+  const own = await ownProcessIdentity();
   const namespace = own.pidNamespace === undefined ? {} : { pidNamespace: own.pidNamespace };
   const fields = { token: randomUUID(), directory, pid: own.pid, start: own.start, boot: own.boot, host: hostname() };
   return identitySchema.parse({ ...fields, ...namespace });
@@ -49,7 +49,7 @@ function readIdentity(directory: string, name: string, unpublished = false): Ide
 class ForeignOwnerError extends Error {
   constructor() { super('Cannot verify foreign owner identity'); }
 }
-function alive(identity: Identity, own: Identity): boolean {
+async function alive(identity: Identity, own: Identity): Promise<boolean> {
   if (identity.host !== own.host) throw new ForeignOwnerError();
   // Only two random boot IDs prove a reboot. The Windows token is a boot INSTANT that moves when the
   // clock is set, so there a mismatch falls through to pid + start: its start ticks are absolute
@@ -63,11 +63,11 @@ function alive(identity: Identity, own: Identity): boolean {
     // hostname) may live anywhere. Its exact pid+start showing up here is a positive sighting and keeps
     // it alive; anything else is unverifiable, never absent. A live legacy owner keeps the fence, a dead
     // one waits for a reboot or a manual owner.lock removal — the price of never stealing a live lock.
-    if (identity.pidNamespace === undefined && processStarts([identity.pid]).get(identity.pid) === identity.start) return true;
+    if (identity.pidNamespace === undefined && (await processStarts([identity.pid])).get(identity.pid) === identity.start) return true;
     throw new ForeignOwnerError();
   }
   // A probe failure throws (fail closed): an unverifiable owner is never declared dead.
-  return processStarts([identity.pid]).get(identity.pid) === identity.start;
+  return (await processStarts([identity.pid])).get(identity.pid) === identity.start;
 }
 export interface WebhookOwnership { valid(): boolean; release(): Promise<void>; recovered: boolean }
 /** Transfers failed acquisition cleanup into the caller's already-bounded reservation. */
@@ -83,7 +83,7 @@ export class OwnershipCleanupError extends Error {
  * before it publishes owner.lock by rename. No heartbeat age authorizes a takeover.
  */
 export async function acquireOwnership(directory: string, copiedRoot = false): Promise<WebhookOwnership | undefined> {
-  const own = ownIdentity(directory);
+  const own = await ownIdentity(directory);
   const candidateName = `owner-record-${own.token}.json`;
   const candidate = statePath(directory, candidateName);
   const file = await open(candidate, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
@@ -112,18 +112,20 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
     for (const name of await readdir(directory)) {
       const match = /^owner-(record|next|publication)-([0-9a-f-]{36})\.(?:json|tmp)$/.exec(name);
       if (!match || match[2] === own.token) continue;
-      const orphan = readIdentity(directory, name, true);
+      let orphan: Identity | undefined;
+      try { orphan = readIdentity(directory, name, true); } catch { continue; }
       if (!orphan || orphan.host !== own.host || orphan.token === own.token) continue;
       // A candidate/publication file is named after the identity it holds, so a mismatch means the
       // name and the content disagree and the file is not that writer's. A successor slot is named
       // after the DEAD predecessor and holds its CLAIMANT's identity, so only that claimant's
       // liveness decides — a live contender's slot must survive.
       if (match[1] !== 'next' && orphan.token !== match[2]) continue;
-      try { if (alive(orphan, own)) continue; }
-      catch (error) { if (error instanceof ForeignOwnerError) continue; throw error; }
+      try { if (await alive(orphan, own)) continue; }
+      catch { continue; } // Unverifiable is not dead; an orphan cannot block acquisition.
       // The probe above can take a second (a cold PowerShell spawn on Windows); re-read without a
       // probe so only the exact file verified dead is removed.
-      const confirmed = readIdentity(directory, name, true);
+      let confirmed: Identity | undefined;
+      try { confirmed = readIdentity(directory, name, true); } catch { continue; }
       if (!confirmed || confirmed.token !== orphan.token) continue;
       await rm(statePath(directory, name), { force: true });
     }
@@ -140,7 +142,7 @@ export async function acquireOwnership(directory: string, copiedRoot = false): P
         // can fail to terminate. Fail closed there instead of capping the depth: a fixed bound would
         // let a long chain of crashed recoveries wedge the fence permanently.
         if (ancestors.has(previous.token)) throw new Error('Webhook owner recovery chain cycles');
-        if (!(copiedRoot && previous.directory !== directory) && alive(previous, own)) return undefined;
+        if (!(copiedRoot && previous.directory !== directory) && await alive(previous, own)) return undefined;
         ancestors.add(previous.token);
         const successorName = `owner-next-${previous.token}.json`;
         try {

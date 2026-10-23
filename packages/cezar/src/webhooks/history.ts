@@ -29,12 +29,21 @@ export class WebhookHistory {
   private deliveries: WebhookDelivery[] = [];
   private actions: ActivityRow[] = [];
   private reset = false;
+  private tail: Promise<unknown> = Promise.resolve();
+  private serialize<T>(work: () => Promise<T>): Promise<T> {
+    const result = this.tail.then(work);
+    this.tail = result.catch(() => undefined);
+    return result;
+  }
   private constructor(private readonly directory: string, private readonly now: () => number, private readonly cap: number) {}
   /** History is display data: an unreadable log is quarantined, never allowed to brick webhooks. */
   get wasReset(): boolean { return this.reset; }
   static async open(directory: string, now = Date.now, cap = 10 * 1024 * 1024): Promise<WebhookHistory> {
     const history = new WebhookHistory(directory, now, cap);
-    history.deliveries = await history.read('deliveries.ndjson', webhookDeliverySchema);
+    const deliveries = await history.read('deliveries.ndjson', webhookDeliverySchema);
+    const latest = new Map<string, WebhookDelivery>();
+    for (const row of deliveries) { latest.delete(row.deliveryId); latest.set(row.deliveryId, row); }
+    history.deliveries = [...latest.values()];
     history.actions = await history.read('activity.ndjson', activityRowSchema);
     return history;
   }
@@ -44,7 +53,17 @@ export class WebhookHistory {
       try {
         if ((await file.stat()).size > this.cap) throw new Error('Webhook history exceeds capacity');
         const content = await file.readFile('utf8');
-        return content.split('\n').filter(Boolean).map(line => schema.parse(JSON.parse(line)));
+        // A crash may leave an unterminated append. Validate the committed prefix before
+        // repairing it; malformed complete rows still take the existing quarantine path.
+        const end = content.lastIndexOf('\n') + 1;
+        const rows = content.slice(0, end).split('\n').filter(Boolean).map(line => schema.parse(JSON.parse(line)));
+        if (end !== content.length) {
+          // Close before atomic replacement (Windows disallows replacing an open handle).
+          await file.close();
+          const prepared = await prepareText(this.directory, name, content.slice(0, end));
+          try { prepared.publish(); await prepared.finish(); } finally { await prepared.discard(); }
+        }
+        return rows;
       } finally { await file.close(); }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
@@ -59,11 +78,34 @@ export class WebhookHistory {
       return [];
     }
   }
-  private async write<T>(name: string, values: T[], assertOwner?: () => void): Promise<T[]> {
+  private async write<T>(name: string, values: T[], assertOwner?: () => void, appended?: T[]): Promise<T[]> {
+    if (appended) {
+      const content = appended.map(value => JSON.stringify(value) + '\n').join('');
+      let file;
+      try { file = await open(statePath(this.directory, name), constants.O_RDWR | constants.O_APPEND | constants.O_NOFOLLOW); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      if (file) {
+        try {
+          const size = (await file.stat()).size;
+          if (size + Buffer.byteLength(content) <= this.cap) {
+            try { await file.writeFile(content, 'utf8'); await file.sync(); }
+            catch (error) {
+              // Keep this instance usable after a failed append, without a partial JSON row.
+              await file.truncate(size); await file.sync(); throw error;
+            }
+            return values;
+          }
+        } finally { await file.close(); }
+      }
+    }
+    // Leave headroom after compaction so a full log does not rewrite on every delivery.
+    // A single large latest row may use the whole cap.
+    const target = appended ? Math.max(Math.floor(this.cap * 0.75),
+      Buffer.byteLength(JSON.stringify(values.at(-1)) ?? '') + 1) : this.cap;
     let size = 0; const retained: T[] = [];
     for (const value of [...values].reverse()) {
       const bytes = Buffer.byteLength(JSON.stringify(value)) + 1;
-      if (size + bytes > this.cap) break;
+      if (size + bytes > Math.min(this.cap, target)) break;
       retained.push(value); size += bytes;
     }
     retained.reverse();
@@ -72,7 +114,10 @@ export class WebhookHistory {
     return retained;
   }
   /** Legacy rows have no trustworthy destination provenance, including deleted receivers. */
-  async clearLegacyResponses(assertOwner: () => void): Promise<void> {
+  clearLegacyResponses(assertOwner: () => void): Promise<void> {
+    return this.serialize(() => this.clearLegacyResponsesNow(assertOwner));
+  }
+  private async clearLegacyResponsesNow(assertOwner: () => void): Promise<void> {
     if (!this.deliveries.some(row => row.response !== undefined)) return;
     assertOwner();
     const clean = this.deliveries.map(({ response: _, ...row }) => row);
@@ -82,18 +127,25 @@ export class WebhookHistory {
   activities(receiverId: string): WebhookActivity[] { return structuredClone(this.actions.filter(row => row.receiverId === receiverId || row.receiverId === '').map(row => row.activity)); }
   receiverIds(): Set<string> { return new Set([...this.deliveries.map(row => row.receiverId), ...this.actions.map(row => row.receiverId)]); }
   async result(row: WebhookDelivery): Promise<void> { await this.upsert([row]); }
-  /** One log rewrite for any number of rows (a Pause can settle thousands of queued deliveries). */
+  /** One durable append for a batch; replay uses the last row for each delivery ID. */
   async upsert(rows: readonly WebhookDelivery[]): Promise<void> {
     if (!rows.length) return;
-    const parsed = rows.map(row => webhookDeliverySchema.parse(row)), ids = new Set(parsed.map(row => row.deliveryId));
-    this.deliveries = await this.write('deliveries.ndjson', [...this.deliveries.filter(old => !ids.has(old.deliveryId)), ...parsed]);
+    const parsed = [...new Map(rows.map(row => {
+      const value = webhookDeliverySchema.parse(row); return [value.deliveryId, value] as const;
+    })).values()], ids = new Set(parsed.map(row => row.deliveryId));
+    await this.serialize(async () => {
+      this.deliveries = await this.write('deliveries.ndjson', [...this.deliveries.filter(old => !ids.has(old.deliveryId)), ...parsed], undefined, parsed);
+    });
   }
   async activity(receiverId: string, value: WebhookActivity, secrets: readonly string[] = []): Promise<void> {
     const activity = webhookActivitySchema.parse(redactDeep(value, [...collectSecretValues(), ...secrets]));
-    this.actions = await this.write('activity.ndjson', [...this.actions, { receiverId, activity }]);
+    await this.serialize(async () => {
+      this.actions = await this.write('activity.ndjson', [...this.actions, { receiverId, activity }], undefined, [{ receiverId, activity }]);
+    });
   }
   /** Rewrites a log only when a row expired: an idle project must not rewrite and fsync it every window. */
-  async prune(): Promise<void> {
+  prune(): Promise<void> { return this.serialize(() => this.pruneNow()); }
+  private async pruneNow(): Promise<void> {
     const earliest = this.now() - 30 * 86400000;
     const deliveries = this.deliveries.filter(row => Date.parse(row.completedAt ?? row.createdAt) > earliest);
     if (deliveries.length !== this.deliveries.length) this.deliveries = await this.write('deliveries.ndjson', deliveries);

@@ -2996,7 +2996,6 @@ export function createApp(deps: ServerDeps) {
         );
       }
 
-      const webhookWarning = await webhooks?.remove(entry.root);
       let removed: boolean;
       try {
         removed = await removeProject(id);
@@ -3007,6 +3006,9 @@ export function createApp(deps: ServerDeps) {
       // Lost a race with another writer (or another cezar process): the entry is
       // gone, which is what the caller wanted, but say it honestly.
       if (!removed) return c.json({ error: `unknown project: ${id}` }, 404);
+      // Stop capture only after the registry commit; failed removal must leave
+      // the registered project operational. Pause before disposing its context.
+      const webhookWarning = await webhooks?.remove(entry.root);
       // In-process handles for a project no route can reach any more: store
       // closed (index flushed), manager's timers and usage subscription dropped.
       trackerWatches.invalidateProject(entry.root);

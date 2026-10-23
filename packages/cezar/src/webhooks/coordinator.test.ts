@@ -92,3 +92,24 @@ describe('lightweight project webhook enrollment', () => {
     expect(reopened.list().receivers[0]).toMatchObject({ state: 'paused', pauseReason: 'project_removal' });
   });
 });
+
+it('throttles failed first opens across aliases and retries after failure cooldown', async () => {
+  vi.stubEnv('CEZ_WEBHOOKS', '1');
+  const project = root();
+  const coordinator = new WebhookCoordinator({ mode: () => 'local', ports: () => [], projects: async () => [] });
+  instances.push(coordinator);
+  let now = 100000;
+  const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const open = vi.spyOn(WebhookService, 'open').mockImplementation(async () => {
+    now += 30000; // A cold probe can outlast the retry interval.
+    throw new Error('owner unavailable');
+  });
+  try {
+    await expect(coordinator.get('project', project)).rejects.toThrow();
+    await expect(coordinator.get('alias', project)).rejects.toThrow();
+    expect(open).toHaveBeenCalledTimes(1);
+    now += 15000;
+    await expect(coordinator.get('alias', project)).rejects.toThrow();
+    expect(open).toHaveBeenCalledTimes(2);
+  } finally { open.mockRestore(); clock.mockRestore(); }
+});

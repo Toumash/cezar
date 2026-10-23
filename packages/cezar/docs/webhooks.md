@@ -297,3 +297,19 @@ receivers does not stop workflow-node HTTP, and a lifecycle delivery failure can
 
 Use the receiver guide and JSON Schema from the same cezar release/tag you run. These are
 repository documentation assets, not runtime imports or components of the npm service.
+
+## Manual browser regression suites
+
+Two additional fixture-based suites are **manual-only** and are not included in the
+standard Vitest or CI gate. From the repository root, after installing dependencies
+and building the application, run:
+
+```sh
+npx --no-install e2e run --config packages/web/e2e/chat-webhooks.config.ts
+npx --no-install e2e run --config packages/web/e2e/webhooks-review.config.ts
+```
+
+The chat suite covers native receiver setup; the review suite covers delayed UI
+actions and delivery controls. Both use fictional credentials and a server forced
+to `CEZ_DRY_RUN=1`. They require the e2e browser runtime and do not verify live
+Slack or Discord delivery.

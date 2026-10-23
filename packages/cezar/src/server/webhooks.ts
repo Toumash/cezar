@@ -7,14 +7,14 @@ import {
 } from '@open-mercato/cezar-contract';
 import type { ProjectContext } from './project-context.ts';
 import { jsonZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
-import { WebhookService, webhooksEnabled } from '../webhooks/service.ts';
+import type { WebhookService } from '../webhooks/service.ts';
 import { webhookPlatformSupported, WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE } from '../webhooks/platform.ts';
 import { WebhookStateError } from '../webhooks/endpoints.ts';
 type WebhookEnv = { Variables: { project: ProjectContext; webhookService: WebhookService } };
 export function createWebhookRoutes(resolve: (context: ProjectContext) => Promise<WebhookService>) {
   const gate: MiddlewareHandler<WebhookEnv> = async (c, next) => {
     if (!webhookPlatformSupported()) return c.json({ error: WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE }, 409);
-    if (!webhooksEnabled()) return c.json({ error: 'Enable webhook delivery with CEZ_WEBHOOKS=1 and restart cezar' }, 409);
+    if (process.env.CEZ_WEBHOOKS !== '1') return c.json({ error: 'Enable webhook delivery with CEZ_WEBHOOKS=1 and restart cezar' }, 409);
     if (!c.get('webhookService')) c.set('webhookService', await resolve(c.get('project')));
     c.header('Cache-Control', 'no-store');
     await next();

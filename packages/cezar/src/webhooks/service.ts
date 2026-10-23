@@ -408,6 +408,9 @@ export class WebhookService extends EventEmitter {
     await this.endpoints.pruneHistory(retained);
   }
   private async choose(): Promise<Candidate | undefined> {
+    // A lease bounds recovery after a crash, not a live transport. Scheduler/DNS waits
+    // can outlast it; only complete() may settle our outstanding attempt.
+    if (this.inFlight) return undefined;
     await this.persistFailures();
     let reclaimed = false;
     for (let count = 0; count < 100; count++) {

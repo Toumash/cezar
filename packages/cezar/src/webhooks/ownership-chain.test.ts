@@ -7,8 +7,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 // The chain walk is exercised without an OS probe per link: a long dead chain would otherwise cost
 // one probe each (a cold PowerShell spawn on Windows) and make this test host-dependent.
 vi.mock('./process-identity.ts', () => ({
-  ownProcessIdentity: () => ({ pid: 4242, start: '1', boot: 'boot' }),
-  processStarts: (pids: number[]) => new Map(pids.filter(pid => pid === 4242).map(pid => [pid, '1'])),
+  ownProcessIdentity: async () => ({ pid: 4242, start: '1', boot: 'boot' }),
+  processStarts: async (pids: number[]) => new Map(pids.filter(pid => pid === 4242).map(pid => [pid, '1'])),
 }));
 import * as ownership from './ownership.ts';
 

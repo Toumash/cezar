@@ -84,3 +84,40 @@ it.each(['retry', 'grace', 'probe'] as const)(
     }
   },
 );
+
+it('keeps a live test claim past its lease and records the actual result across restart', async () => {
+  vi.stubEnv('CEZ_WEBHOOKS', '1');
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-slow-'));
+  execFileSync('git', ['init', '-q'], { cwd: root });
+  const dataDir = join(root, '.ai/cezar');
+  let now = Date.parse('2026-10-15T00:00:00Z');
+  let finish!: (result: SendResult) => void;
+  let entered!: () => void;
+  const sending = new Promise<void>(resolve => { entered = resolve; });
+  const send = vi.fn(async (): Promise<SendResult> => {
+    entered(); return new Promise(resolve => { finish = resolve; });
+  });
+  const options = { root, dataDir, projectId: 'slow', mode: 'local' as const, serverPorts: () => [],
+    scheduler: new WebhookScheduler(), now: () => now, send };
+  let service = (await WebhookService.open(options))!;
+  let tick: Promise<void> | undefined;
+  try {
+    const { receiver } = await service.create({ name: 'Slow', url: 'https://receiver.invalid' });
+    await service.test(receiver.id, { expectedRevision: 1, deliveryRevision: 1, operationId: 'slow-test' });
+    tick = service.tick(); await sending;
+    now += 11000;
+    await Promise.all([service.tick(), service.tick()]);
+    finish({ kind: 'http', status: 204 }); await tick;
+    expect(service.deliveries(receiver.id)[0]).toMatchObject({ status: 'delivered', httpStatus: 204, attempts: 1 });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(service.list().receivers[0]!.lastTest).toBe('success');
+    await service.dispose();
+    service = (await WebhookService.open(options))!;
+    await service.tick();
+    expect(service.deliveries(receiver.id)[0]).toMatchObject({ status: 'delivered', httpStatus: 204 });
+    expect(send).toHaveBeenCalledTimes(1);
+  } finally {
+    finish?.({ kind: 'http', status: 204 }); await tick;
+    await service.dispose(); rmSync(root, { recursive: true, force: true });
+  }
+});

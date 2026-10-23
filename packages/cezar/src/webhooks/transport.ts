@@ -1,5 +1,5 @@
 import type { WebhookFormat } from '@open-mercato/cezar-contract';
-import { Agent, request } from 'undici';
+import type { Agent } from 'undici';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
 import { DestinationPolicyError, validateDestination, type DestinationPolicy, type Lookup } from './destination.ts';
 import { signWebhook } from './signing.ts';
@@ -96,6 +96,8 @@ export async function sendWebhook(input: WebhookSend, dependencies: { lookup?: L
     if (input.format === 'discord.v1' && target.url.protocol === 'https:' && discordHosts.has(target.url.hostname)) {
       target.url.searchParams.set('wait', 'true');
     }
+    // Load the HTTP client only for an actual send, after destination validation.
+    const { Agent, request } = await untilAbort(import('undici'), controller.signal);
     dispatcher = new Agent({
       connections: 1, pipelining: 1,
       connect: {

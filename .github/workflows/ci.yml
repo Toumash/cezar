@@ -98,7 +98,7 @@ jobs:
   # Preview publication waits for every leg. Required merge checks are configured separately
   # in branch protection; local test commands still run only on the developer's own OS.
   webhooks-cross-platform:
-    # Preserve existing check names for repositories that already require them.
+    # Separate OS checks make platform failures visible in branch protection.
     name: Webhook ownership on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30

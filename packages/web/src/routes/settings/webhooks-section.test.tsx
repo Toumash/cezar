@@ -5,12 +5,12 @@ import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import { WebhooksSection } from './webhooks-section'
-const mocks = vi.hoisted(() => ({ enabled: false, unsupported: false, project: 'alpha', list: vi.fn(), create: vi.fn(), activity: vi.fn(), deliveries: vi.fn() }))
-vi.mock('@/api/queries', () => ({ useHealth: () => ({ data: { capabilities: { webhooks: mocks.enabled, webhooksUnavailableReason: mocks.unsupported ? 'unsupported_platform' : undefined } } }) }))
+const mocks = vi.hoisted(() => ({ healthState: 'ready', enabled: false, unsupported: false, project: 'alpha', list: vi.fn(), create: vi.fn(), activity: vi.fn(), deliveries: vi.fn() }))
+vi.mock('@/api/queries', () => ({ useHealth: () => ({ isError: mocks.healthState === 'error', data: mocks.healthState === 'ready' ? { capabilities: { webhooks: mocks.enabled, webhooksUnavailableReason: mocks.unsupported ? 'unsupported_platform' : undefined } } : undefined }) }))
 vi.mock('@/lib/project-router', () => ({ useActiveProjectId: () => mocks.project }))
 vi.mock('@/api/client', () => ({ getSelfUpdate: vi.fn().mockResolvedValue({ version: '0.15.0', installKind: 'checkout' }), webhookApi: { list: mocks.list, create: mocks.create, activity: mocks.activity, deliveries: mocks.deliveries } }))
 beforeEach(() => { vi.stubGlobal('EventSource', undefined); vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unexpected network request') })) })
-afterEach(() => { vi.unstubAllGlobals(); cleanup(); vi.clearAllMocks(); mocks.enabled = false; mocks.unsupported = false; mocks.project = 'alpha' })
+afterEach(() => { vi.unstubAllGlobals(); cleanup(); vi.clearAllMocks(); mocks.healthState = 'ready'; mocks.enabled = false; mocks.unsupported = false; mocks.project = 'alpha' })
 function mount(client = createQueryClient()) { return render(<QueryClientProvider client={client}><MemoryRouter><WebhooksSection /></MemoryRouter></QueryClientProvider>) }
 describe('project webhook settings', () => {
 
@@ -114,4 +114,12 @@ describe('project webhook settings', () => {
     expect(screen.getByText('Paused. New events aren’t queued.')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Test after repair' })).toBeTruthy()
   })
+})
+
+it.each(['loading', 'error'])('does not call %s health disabled', state => {
+  mocks.healthState = state
+  mount()
+  expect(screen.getByRole('status').textContent).toContain(state === 'loading' ? 'Loading webhook status' : 'Webhook status unavailable')
+  expect(screen.queryByText('Webhooks are off')).toBeNull()
+  expect(mocks.list).not.toHaveBeenCalled()
 })

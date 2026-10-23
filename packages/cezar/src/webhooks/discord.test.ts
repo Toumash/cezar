@@ -29,7 +29,7 @@ describe('Discord rendering', () => {
     expect(result.content).toContain('@\u200beveryone');
     expect(result.content).toContain('<@\u200b123\\>');
     expect(result.content).toContain('\\*bold\\*');
-    expect(result.content).toContain('\\[trusted\\]\\(https://evil.test\\)');
+    expect(result.content).toContain('\\[trusted\\]\\(<https://evil.test>\\)');
     expect(result.content).toContain('\\# header');
     expect(result.content).toContain('\\- item');
     expect(result.allowed_mentions).toEqual({ parse: [] });
@@ -65,4 +65,57 @@ describe('Discord rendering', () => {
     expect(result.content).toContain('cezar is connected to this channel');
     expect(result.content).toContain('@\u200beveryone'); expect(result.allowed_mentions).toEqual({ parse: [] });
   });
+});
+
+it('suppresses content URL previews without escaping URL syntax', () => {
+  const value = event('task.finished', true);
+  value.task.title = 'See https://example.test/a_b?q=x*y&user=@someone and <https://example.test/next>';
+  const result = JSON.parse(renderDiscordMessage(JSON.stringify(value)));
+  expect(result.content).toContain('<https://example.test/a_b?q=x*y&user=@someone>');
+  expect(result.content).toContain('<https://example.test/next>');
+  expect(result.allowed_mentions).toEqual({ parse: [] });
+  expect(result.content.length).toBeLessThanOrEqual(2000);
+});
+
+it('never truncates a suppression wrapper or exceeds the content limit', () => {
+  const test = JSON.stringify({ id: 'evt_11111111-1111-4111-8111-111111111111', schemaVersion: 1,
+    occurredAt: at, type: 'webhook.test', data: { test: true, format: 'cezar.json.v1' } });
+  for (const count of [1900, 1946, 1950, 2000]) {
+    const result = JSON.parse(renderDiscordMessage(test, { receiverName: 'a'.repeat(count) + ' https://example.test/' + 'x'.repeat(100) }));
+    expect(result.content.length).toBeLessThanOrEqual(2000);
+    expect(result.content).not.toContain('https://');
+  }
+  const result = JSON.parse(renderDiscordMessage(test, { receiverName: 'https://example.test/a_b' }));
+  expect(result.content).toContain('<https://example.test/a_b>');
+});
+
+// Exercise both contentText callers: task titles and test receiver names.
+it.each([
+  ['[a](https://a.test)[b](https://b.test)', String.raw`\[a\]\(<https://a.test>\)\[b\]\(<https://b.test>\)`],
+  ['https://en.wikipedia.org/wiki/Function_(mathematics)', '<https://en.wikipedia.org/wiki/Function_(mathematics)>'],
+  ['http://[2001:db8::1]/health', '<http://[2001:db8::1]/health>'],
+  ['https://example.test/search?q=[foo]', '<https://example.test/search?q=[foo]>'],
+  ['(https://example.test/a_(b(c)))', String.raw`\(<https://example.test/a_(b(c))>\)`],
+  ['[https://example.test/search?q=[foo]]', String.raw`\[<https://example.test/search?q=[foo]>\]`],
+  ['[trusted](https://example.test/a_(b))', String.raw`\[trusted\]\(<https://example.test/a_(b)>\)`],
+  ['<https://example.test/a_(b)?q=[foo]>', '<https://example.test/a_(b)?q=[foo]>'],
+  ['(http://[::1]/health) @everyone', String.raw`\(<http://[::1]/health>\) @` + '\u200beveryone'],
+])('preserves complete URL targets and surrounding delimiters: %s', (input, expected) => {
+  const value = event('task.finished', true);
+  value.task.title = input;
+  const task = JSON.parse(renderDiscordMessage(JSON.stringify(value)));
+  const test = JSON.parse(renderDiscordMessage(JSON.stringify({ id: 'evt_11111111-1111-4111-8111-111111111111', schemaVersion: 1,
+    occurredAt: at, type: 'webhook.test', data: { test: true, format: 'cezar.json.v1' } }), { receiverName: input }));
+  expect(task.content).toBe(`Task finished · ${expected}`);
+  expect(test.content).toBe(`Test message · cezar is connected to this channel · ${expected}`);
+  for (const result of [task, test]) expect(result.allowed_mentions).toEqual({ parse: [] });
+});
+
+it('drops a complete balanced URL atomically when only its prefix fits', () => {
+  const test = JSON.stringify({ id: 'evt_11111111-1111-4111-8111-111111111111', schemaVersion: 1,
+    occurredAt: at, type: 'webhook.test', data: { test: true, format: 'cezar.json.v1' } });
+  const result = JSON.parse(renderDiscordMessage(test, { receiverName: 'a'.repeat(1900) + ' https://example.test/(' + 'x'.repeat(100) + ')' }));
+  expect(result.content.length).toBeLessThanOrEqual(2000);
+  expect(result.content).not.toContain('https://');
+  expect(result.content).toMatch(/…$/);
 });

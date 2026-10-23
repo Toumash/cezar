@@ -1,3 +1,4 @@
+import { plural } from './webhook-presentation'
 import { useWebhookList } from '@/hooks/use-webhooks'
 import { useHealth, useRemoveProject } from '@/api/queries'
 import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
@@ -75,8 +76,8 @@ export function RemoveProjectDialog({
             This only unregisters the project — <strong>nothing on disk is deleted</strong>. The
             folder, its git history and its task history all stay exactly where they are, and
             adding it back later finds everything intact.
-            {affected.length > 0 && <span className="mt-2 block">{affected.length} receivers will be paused. {pending} pending deliveries will be cancelled; {inFlight} in flight may still arrive.</span>}
-            {webhooks.error && <span className="mt-2 block">Webhook state is unavailable. Another cockpit may own delivery; removal will report whether receivers could be paused.</span>}
+            {affected.length > 0 && <span className="mt-2 block">{plural(affected.length, 'receiver', 'receivers')} will be paused. {plural(pending, 'pending delivery', 'pending deliveries')} will be cancelled; {inFlight} in flight may still arrive.</span>}
+            {webhooks.error && <span className="mt-2 block">Webhook state is unavailable. Removal will report whether receivers could be paused.</span>}
             <span className="mt-1 block truncate font-mono text-[11px] text-foreground" title={project?.root}>
               {project?.root}
             </span>

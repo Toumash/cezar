@@ -9,7 +9,7 @@
  * The returned `start` is an opaque, platform-local token that is stable for the life of one
  * process and different for a later process that reuses its PID.
  */
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, readlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { webhookPlatformSupported, WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE } from './platform.ts';
@@ -29,18 +29,16 @@ const WINDOWS_PROBE_SENTINEL = 'cez-probe-complete';
 /** Printed last by the combined own-process probe; start and boot must come from one complete run. */
 const WINDOWS_OWN_PROBE_SENTINEL = 'cez-own-probe-complete';
 
-function probe(command: string, args: string[], partial = false, environment: NodeJS.ProcessEnv = process.env): string {
-  try {
-    return execFileSync(command, args, { timeout: PROBE_TIMEOUT_MS, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: environment, windowsHide: true });
-  } catch (error) {
-    const failure = error as NodeJS.ErrnoException & { stdout?: string; signal?: NodeJS.Signals | null; status?: number | null };
-    // `ps` may list the pids it found and exit non-zero when another is gone, so a partial result
-    // is only trusted when the child exited NORMALLY. A killed or timed-out probe (signal set,
-    // status null) must never pass for "no such pid" — that would declare a live owner dead.
-    const normalExit = failure.signal == null && typeof failure.status === 'number';
-    if (partial && failure.code !== 'ENOENT' && normalExit && typeof failure.stdout === 'string') return failure.stdout;
-    throw new Error(VERIFY_ERROR);
-  }
+async function probe(command: string, args: string[], partial = false, environment: NodeJS.ProcessEnv = process.env): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { timeout: PROBE_TIMEOUT_MS, encoding: 'utf8', env: environment, windowsHide: true }, (error, stdout) => {
+      // execFile reports a normal nonzero exit with a numeric code. Spawn errors,
+      // signals, timeouts and output-limit kills must never be read as an absent PID.
+      const normalExit = error && !error.killed && error.signal == null && typeof error.code === 'number';
+      if (!error || (partial && normalExit)) resolve(stdout);
+      else reject(new Error(VERIFY_ERROR));
+    });
+  });
 }
 
 function linuxProcessStart(pid: number): string | undefined {
@@ -75,11 +73,11 @@ export function parseDarwinProcessStarts(output: string): Map<number, string> {
   return starts;
 }
 
-function darwinProcessStarts(pids: number[]): Map<number, string> {
+async function darwinProcessStarts(pids: number[]): Promise<Map<number, string>> {
   // `LC_ALL`/`TZ` must be pinned on BOTH writer and reader: a locale- or zone-dependent
   // `lstart` string would make a live owner look dead and authorize an unsafe takeover. The
   // binaries are absolute: a GUI/launchd PATH has /usr/bin but sysctl lives in /usr/sbin.
-  return parseDarwinProcessStarts(probe('/bin/ps', ['-p', pids.join(','), '-o', 'pid=,state=,lstart='], true, { ...process.env, LC_ALL: 'C', TZ: 'UTC' }));
+  return parseDarwinProcessStarts(await probe('/bin/ps', ['-p', pids.join(','), '-o', 'pid=,state=,lstart='], true, { ...process.env, LC_ALL: 'C', TZ: 'UTC' }));
 }
 
 /**
@@ -101,13 +99,13 @@ export function parseWindowsProcessStarts(output: string): Map<number, string> {
   return starts;
 }
 
-function windowsProcessStarts(pids: number[]): Map<number, string> {
+async function windowsProcessStarts(pids: number[]): Promise<Map<number, string>> {
   // `Get-Process -Id` conflates "no such process" with a failed lookup, and only an unreadable
   // `StartTime` fails closed — so one full listing is taken instead, where a pid's absence from the
   // snapshot is the only way to read it as gone. A listing that fails kills the script before the
   // sentinel, which the parser rejects. `StartTime` throws for a process this user cannot open
   // (protected/elevated/other-user), so that case is reported as `unknown`, never as absent.
-  return parseWindowsProcessStarts(probe(powershellCommand(), ['-NoProfile', '-NonInteractive', '-Command', windowsProbeScript(pids)]));
+  return parseWindowsProcessStarts(await probe(powershellCommand(), ['-NoProfile', '-NonInteractive', '-Command', windowsProbeScript(pids)]));
 }
 
 /**
@@ -127,9 +125,9 @@ export function windowsProbeScript(pids: number[]): string {
 }
 
 /** Windows-only combined probe: one cold PowerShell start supplies the start token and diagnostic boot timestamp. */
-function windowsOwnProcessIdentity(pid: number): OwnProcessIdentity {
+async function windowsOwnProcessIdentity(pid: number): Promise<OwnProcessIdentity> {
   const script = `$all = @(Get-Process -ErrorAction Stop); $p = $all | Where-Object { $_.Id -eq ${pid} } | Select-Object -First 1; if ($null -eq $p) { throw 'own process missing' }; $start = $p.StartTime.ToUniversalTime().Ticks; $boot = ${WINDOWS_BOOT_SCRIPT}; "${pid} $start $boot"; '${WINDOWS_OWN_PROBE_SENTINEL}'`;
-  const lines = probe(powershellCommand(), ['-NoProfile', '-NonInteractive', '-Command', script])
+  const lines = (await probe(powershellCommand(), ['-NoProfile', '-NonInteractive', '-Command', script]))
     .split('\n').map(line => line.trim()).filter(Boolean);
   if (lines.at(-1) !== WINDOWS_OWN_PROBE_SENTINEL || lines.length !== 2) throw new Error(VERIFY_ERROR);
   const match = /^(\d+)\s+(\d+)\s+(\d+)$/.exec(lines[0]!);
@@ -147,7 +145,7 @@ export function maxProbePid(platform: NodeJS.Platform = process.platform): numbe
 }
 
 /** Start tokens for the requested PIDs. A PID absent from the result is provably not running. */
-export function processStarts(pids: number[]): Map<number, string> {
+export async function processStarts(pids: number[]): Promise<Map<number, string>> {
   const ceiling = maxProbePid();
   const candidates = [...new Set(pids)].filter(pid => Number.isInteger(pid) && pid > 0 && pid <= ceiling);
   if (!candidates.length) return new Map();
@@ -163,17 +161,17 @@ export function processStarts(pids: number[]): Map<number, string> {
 let bootCache: string | undefined;
 /** Windows-only, exported so the boot-token choice is pinned without a Windows host. */
 export const WINDOWS_BOOT_SCRIPT = '(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().Ticks';
-function bootIdentity(): string {
+async function bootIdentity(): Promise<string> {
   if (bootCache !== undefined) return bootCache;
   if (process.platform === 'linux') bootCache = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
-  else if (process.platform === 'darwin') bootCache = probe('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid']).trim();
+  else if (process.platform === 'darwin') bootCache = (await probe('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'])).trim();
   // `LastBootUpTime` arrives as a Local-kind DateTime (MMI zone-converts the WMI instant), so raw
   // `.Ticks` would be that instant re-rendered in the CURRENT zone. `ToUniversalTime()` is the exact
   // inverse. That was measured on .NET 8 only; the shipped Windows PowerShell 5.1 runs on .NET
   // Framework and is unmeasured. It no longer matters for safety: the value derives from KeBootTime,
   // which the kernel shifts whenever system time is SET (NTP step, manual change), so a Windows boot
   // mismatch never authorizes a takeover on its own (`bootIsStableId`) and only pid+start decide.
-  else if (process.platform === 'win32') bootCache = probe(powershellCommand(), ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_BOOT_SCRIPT]).trim();
+  else if (process.platform === 'win32') bootCache = (await probe(powershellCommand(), ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_BOOT_SCRIPT])).trim();
   else throw new Error(WEBHOOK_UNSUPPORTED_PLATFORM_MESSAGE);
   if (!bootCache) throw new Error(VERIFY_ERROR);
   return bootCache;
@@ -204,12 +202,20 @@ let ownCache: OwnProcessIdentity | undefined;
  * This process's own identity, memoized: it cannot change while the process lives, and
  * re-probing on every ownership check would shell out on the hot path (`valid()`).
  */
-export function ownProcessIdentity(): OwnProcessIdentity {
+async function loadOwnProcessIdentity(): Promise<OwnProcessIdentity> {
   if (ownCache) return ownCache;
-  if (process.platform === 'win32') return ownCache = windowsOwnProcessIdentity(process.pid);
-  const start = processStarts([process.pid]).get(process.pid);
+  if (process.platform === 'win32') return ownCache = await windowsOwnProcessIdentity(process.pid);
+  const start = (await processStarts([process.pid])).get(process.pid);
   if (start === undefined) throw new Error(VERIFY_ERROR);
-  const boot = bootIdentity();
+  const boot = await bootIdentity();
   ownCache = { pid: process.pid, start, boot, ...(process.platform === 'linux' ? { pidNamespace: linuxPidNamespace() } : {}) };
   return ownCache;
+}
+
+// Coalesce concurrent first opens; a failed probe is retryable rather than cached forever.
+let ownPending: Promise<OwnProcessIdentity> | undefined;
+export async function ownProcessIdentity(): Promise<OwnProcessIdentity> {
+  if (ownCache) return ownCache;
+  if (!ownPending) ownPending = loadOwnProcessIdentity().finally(() => { ownPending = undefined; });
+  return ownPending;
 }

@@ -13,16 +13,55 @@ function clip(text: string, limit: number): string {
   return text.slice(0, limit - 1).replace(/[\uD800-\uDBFF]$/, '').replace(/\\$/, '') + '…';
 }
 
+/** Keep URL tokens intact: markdown escaping inside <...> breaks Discord's no-unfurl syntax. */
+function contentText(text: string, limit = 2000): string {
+  const parts: string[] = [];
+  let cursor = 0, length = 0;
+  const add = (part: string, atomic = false): boolean => {
+    const available = limit - length;
+    if (available <= 0) return part.length === 0;
+    if (part.length > available) {
+      if (atomic) { if (available > 0) parts.push('…'); }
+      else parts.push(clip(part, available));
+      return false;
+    }
+    parts.push(part); length += part.length; return true;
+  };
+  const urls = /<?(https?:\/\/[^\s<>\\]+)>?/gi;
+  for (let match; (match = urls.exec(text));) {
+    if (!add(escape(text.slice(cursor, match.index)))) return parts.join('');
+    let url = match[1]!; // Preserve URL syntax; allowed_mentions disables mention parsing.
+    const wrapped = match[0].startsWith('<') && match[0].endsWith('>');
+    if (!wrapped) {
+      // Balanced delimiters belong to the URL (including IPv6 hosts); an unmatched
+      // closer belongs to surrounding prose or Markdown, e.g. [label](url).
+      const closers: string[] = [];
+      for (let i = 0; i < url.length; i++) {
+        const char = url[i]!;
+        if (char === '(' || char === '[') closers.push(char === '(' ? ')' : ']');
+        else if (char === ')' || char === ']') {
+          if (closers.pop() !== char) { url = url.slice(0, i); break; }
+        }
+      }
+    }
+    if (!add(`<${url}>`, true)) return parts.join('');
+    cursor = match.index + (wrapped ? match[0].length : (match[0].startsWith('<') ? 1 : 0) + url.length);
+    urls.lastIndex = cursor; // Scan again after a closer, including adjacent Markdown links.
+  }
+  add(escape(text.slice(cursor)));
+  return parts.join('');
+}
+
 /** Renders only the event's existing privacy-filtered fields; mention parsing stays disabled. */
 export function renderDiscordMessage(eventJson: string, ctx: { receiverName?: string } = {}): string {
   const event = webhookEventSchema.parse(JSON.parse(eventJson));
   const [label, color] = presentation[event.type];
   const allowed_mentions = { parse: [] };
   if (event.type === 'webhook.test') {
-    return JSON.stringify({ content: clip(`${label} · cezar is connected to this channel${ctx.receiverName ? ` · ${escape(ctx.receiverName)}` : ''}`, 2000), allowed_mentions });
+    return JSON.stringify({ content: contentText(`${label} · cezar is connected to this channel${ctx.receiverName ? ` · ${ctx.receiverName}` : ''}`), allowed_mentions });
   }
   const title = escape(event.task.title || event.task.id.slice(0, 8));
-  const content = clip(`${label} · ${title}`, 2000);
+  const content = contentText(`${label} · ${event.task.title || event.task.id.slice(0, 8)}`);
   const fields = [
     { name: 'Project', value: clip(escape(event.source.projectId), 1024), inline: true },
     { name: 'Status', value: `${escape(event.task.previousStatus)} → ${escape(event.task.status)}`, inline: true },

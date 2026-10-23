@@ -5,8 +5,7 @@ import type { CreateWebhook, UpdateWebhook, WebhookReceiver, WebhookHistoricalRe
 import { webhookApi, getSelfUpdate } from '@/api/client'
 import { useHealth } from '@/api/queries'
 import { useActiveProjectId } from '@/lib/project-router'
-import { useWebhookList, useWebhookSubscription, webhookKey } from '@/hooks/use-webhooks'
-import { useWebhookToasts } from '@/hooks/use-webhook-toasts'
+import { useWebhookList, webhookKey } from '@/hooks/use-webhooks'
 import { EllipsisIcon, KeyRoundIcon, PlusIcon, RefreshCwIcon, ShieldOffIcon, Trash2Icon } from 'lucide-react'
 import { toast } from '@/components/ui/toaster'
 import { Pill } from '@/components/pill'
@@ -21,6 +20,8 @@ type Confirmation = { title: string; text: string; run: () => Promise<unknown>; 
 export function WebhooksSection() {
   const projectId = useActiveProjectId() ?? 'default'
   const health = useHealth()
+  if (health.isError) return <p role="status" className={chassis}>Webhook status unavailable — could not load server health.</p>
+  if (!health.data) return <p role="status" className={chassis}>Loading webhook status…</p>
   return <WebhookPanel key={projectId} projectId={projectId} enabled={health.data?.capabilities.webhooks === true} unsupportedPlatform={health.data?.capabilities.webhooksUnavailableReason === 'unsupported_platform'} />
 }
 function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: string; enabled: boolean; unsupportedPlatform: boolean }) {
@@ -51,8 +52,6 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
   const metadata = useQuery({ queryKey: ['workspace', 'self-update'], queryFn: ({ signal }) => getSelfUpdate({ signal }), retry: false })
   const guide = webhookGuide(metadata.data)
   const list = useWebhookList(projectId, enabled)
-  useWebhookSubscription(projectId, enabled)
-  useWebhookToasts(projectId, enabled ? list.data : undefined)
   const [form, setForm] = useState<'new' | WebhookReceiver>()
   const [draft, setDraft] = useState(() => webhookDraft())
   const [stale, setStale] = useState(false)

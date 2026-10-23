@@ -3,7 +3,6 @@ import { WebhookCoordinator } from './webhooks/coordinator.ts';
 import { webhooksEnabled } from './webhooks/service.ts';
 import { allocateProjectSlug, listProjects } from './workspace/projects.ts';
 import { listServerInstances as webhookServerInstances } from './server-install/state.ts';
-import { AutomationStore } from './automations/store.ts';
 import { parseArgs } from 'node:util';
 import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:net';
@@ -341,8 +340,7 @@ async function serveCommand(
   if (webhooks) {
     const registry = (await loadWorkspaceConfig()).projects;
     const publicId = bootProjectId ?? allocateProjectSlug(repoRoot, registry.map(project => project.id));
-    await webhooks.attach({ id: publicId, root: repoRoot, dataDir: join(repoRoot, '.ai/cezar'), store, manager,
-      automationStore: AutomationStore.open(join(repoRoot, '.ai/cezar')), launchKey: '' }, publicId, false, true);
+    await webhooks.attach({ root: repoRoot, store, manager }, publicId, false, true);
   }
   const recovered = store
     .listRuns()

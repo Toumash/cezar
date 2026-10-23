@@ -90,11 +90,15 @@ it.each([false, true])('R2 retries failed-construction token release after repai
   await expect(coordinator.get('fixture', x.root)).rejects.toThrow();
   expect(readFileSync(lock, 'utf8')).toBe(original); // Repeated failed release cannot evict its handle.
   fail = false; vi.restoreAllMocks();
+  // Failed first opens now wait for the recovery cooldown before retrying cleanup.
+  let retryAt = Date.now() + 15000;
+  vi.spyOn(Date, 'now').mockImplementation(() => retryAt);
   if (replaced) {
     const replacement = JSON.stringify({ ...JSON.parse(original), token: randomUUID() }); writeFileSync(lock, replacement);
     await expect(coordinator.get('fixture', x.root)).rejects.toThrow('Another process owns');
     expect(readFileSync(lock, 'utf8')).toBe(replacement);
     writeFileSync(lock, original); await owner!.release();
+    retryAt += 15000;
   }
   const repaired = await coordinator.get('fixture', x.root);
   expect(repaired.list().receivers).toHaveLength(1);

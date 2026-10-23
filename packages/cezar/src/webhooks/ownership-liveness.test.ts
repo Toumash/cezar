@@ -9,19 +9,21 @@ const probe = vi.hoisted(() => ({
   own: { pid: 4242, start: '1', boot: 'boot' } as { pid: number; start: string; boot: string; pidNamespace?: string },
   live: new Map<number, string>(),
   calls: 0,
+  fail: false,
 }));
 vi.mock('./process-identity.ts', async importOriginal => ({
   bootIsStableId: (await importOriginal<typeof import('./process-identity.ts')>()).bootIsStableId,
-  ownProcessIdentity: () => probe.own,
-  processStarts: (pids: number[]) => {
+  ownProcessIdentity: async () => probe.own,
+  processStarts: async (pids: number[]) => {
     probe.calls++;
+    if (probe.fail) throw new Error("Cannot verify process identity");
     return new Map(pids.flatMap(pid => probe.live.has(pid) ? [[pid, probe.live.get(pid)!] as const] : []));
   },
 }));
 import { acquireOwnership } from './ownership.ts';
 
 const dirs: string[] = [];
-beforeEach(() => { probe.live = new Map(); probe.calls = 0; });
+beforeEach(() => { probe.live = new Map(); probe.calls = 0; probe.fail = false; });
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
 const scratch = () => { const dir = mkdtempSync(join(realpathSync(tmpdir()), 'webhook-liveness-')); dirs.push(dir); return dir; };
 
@@ -151,4 +153,25 @@ describe('Linux PID namespaces', () => {
     expect(existsSync(join(dir, name))).toBe(true);
     await owner!.release();
   });
+});
+
+it('skips an unverifiable orphan without disabling acquisition or deleting it', async () => {
+  probe.own = { pid: 4242, start: '1', boot: BOOT_A };
+  probe.fail = true;
+  const dir = scratch();
+  const name = `owner-record-${OWNER}.json`;
+  const raw = JSON.stringify({ token: OWNER, pid: 777, start: '5', boot: BOOT_A, host: hostname() });
+  writeFileSync(join(dir, name), raw);
+  const owner = await acquireOwnership(dir);
+  expect(owner?.valid()).toBe(true);
+  expect(readFileSync(join(dir, name), 'utf8')).toBe(raw);
+  await owner!.release();
+});
+it('keeps an unverifiable published owner fenced', async () => {
+  probe.own = { pid: 4242, start: '1', boot: BOOT_A };
+  probe.fail = true;
+  const dir = scratch();
+  ownerAt(dir, { boot: BOOT_A });
+  await expect(acquireOwnership(dir)).rejects.toThrow('Cannot verify process identity');
+  expect(lockToken(dir)).toBe(OWNER);
 });

@@ -8,6 +8,7 @@ import { WebhookStateError } from './endpoints.ts';
 import type { ProjectContext } from '../server/project-context.ts';
 import { getRepoInfo } from '../server/git.ts';
 import { parseRemote } from '../server/forge/index.ts';
+type CaptureContext = Pick<ProjectContext, 'root' | 'store' | 'manager'>;
 interface Project { id: string; root: string; status: string }
 interface Dependencies { mode(): 'local' | 'hosted'; ports(): readonly number[]; projects(): Promise<readonly Project[]>; dryRun?: boolean; singleProject?: boolean }
 /** Storage owners are independent of RunManagers; discovery never starts or recovers tasks. */
@@ -15,7 +16,7 @@ export class WebhookCoordinator {
   private services = new Map<string, WebhookService>();
   private retiring = new Map<string, WebhookService>();
   private opening = new Map<string, Promise<WebhookService>>();
-  private contexts = new Map<string, { context: ProjectContext; ready: boolean; publicId: string }>();
+  private contexts = new Map<string, { context: CaptureContext; ready: boolean; publicId: string }>();
   private pinned = new Set<string>();
   private scheduler = new WebhookScheduler();
   private timer?: ReturnType<typeof setInterval>;
@@ -36,6 +37,9 @@ export class WebhookCoordinator {
       if ((this.nextRecovery.get(canonical) ?? 0) > Date.now()) return existing;
     }
     const pending = this.opening.get(canonical); if (pending) return pending;
+    if (!existing && (this.nextRecovery.get(canonical) ?? 0) > Date.now()) {
+      throw new WebhookStateError(503, 'Webhook service is unavailable; retry after recovery cooldown');
+    }
     const work = (async () => {
       this.nextRecovery.set(canonical, Date.now() + 15000);
       if (existing) await existing.dispose();
@@ -56,9 +60,14 @@ export class WebhookCoordinator {
       return service;
     })();
     this.opening.set(canonical, work);
-    try { return await work; } finally { this.opening.delete(canonical); }
+    try { return await work; }
+    catch (error) {
+      // Start the cooldown after failure: a cold OS probe may itself exceed 15 seconds.
+      this.nextRecovery.set(canonical, Date.now() + 15000);
+      throw error;
+    } finally { this.opening.delete(canonical); }
   }
-  async attach(context: ProjectContext, publicId: string, ready: boolean, pin = false): Promise<void> {
+  async attach(context: CaptureContext, publicId: string, ready: boolean, pin = false): Promise<void> {
     if (!webhooksEnabled()) return;
     try {
       const root = realpathSync(context.root); this.contexts.set(root, { context, ready, publicId });
@@ -68,7 +77,7 @@ export class WebhookCoordinator {
       if (current?.context === context) service.attach(context.store, context.manager, current.ready);
     } catch { /* Optional integration never prevents task recovery or server boot. */ }
   }
-  detach(context: ProjectContext): void {
+  detach(context: CaptureContext): void {
     // Look up by identity even if the root disappeared after preparation.
     for (const [root, entry] of this.contexts) {
       if (entry.context !== context) continue;
@@ -77,7 +86,7 @@ export class WebhookCoordinator {
     // A replacement may be registered but still waiting for its service to open.
     for (const service of this.services.values()) service.detach(context.store, context.manager);
   }
-  ready(root: string, context?: ProjectContext): void {
+  ready(root: string, context?: CaptureContext): void {
     try {
       const canonical = realpathSync(root); const entry = this.contexts.get(canonical);
       if (!entry || (context && entry.context !== context)) return;
