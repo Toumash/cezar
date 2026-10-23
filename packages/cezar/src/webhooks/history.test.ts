@@ -1,4 +1,4 @@
-import { readFileSync, statSync, readdirSync, realpathSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { constants, readFileSync, statSync, readdirSync, realpathSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as fs from 'node:fs/promises';
@@ -94,6 +94,10 @@ it.each(['write', 'sync'])('rolls back a failed append %s and permits a later du
   const realOpen = fs.open;
   vi.spyOn(fs, 'open').mockImplementationOnce(async (...args) => {
     const file = await realOpen(...args);
+    // Windows append handles cannot be truncated, even when opened with O_RDWR.
+    if (typeof args[1] === 'number' && (args[1] & constants.O_APPEND)) {
+      vi.spyOn(file, 'truncate').mockRejectedValue(Object.assign(new Error('append handle cannot truncate'), { code: 'EPERM' }));
+    }
     const write = file.writeFile.bind(file);
     if (fault === 'write') vi.spyOn(file, 'writeFile').mockImplementationOnce(async () => { await write('{"partial":'); throw new Error('disk full'); });
     else vi.spyOn(file, 'sync').mockRejectedValueOnce(new Error('disk full'));

@@ -91,7 +91,13 @@ export class WebhookHistory {
             try { await file.writeFile(content, 'utf8'); await file.sync(); }
             catch (error) {
               // Keep this instance usable after a failed append, without a partial JSON row.
-              await file.truncate(size); await file.sync(); throw error;
+              // Windows append handles lack the access needed by ftruncate. Reopen without
+              // O_APPEND under the same mutation queue, preserving the no-follow guard.
+              await file.close();
+              const rollback = await open(statePath(this.directory, name), constants.O_RDWR | constants.O_NOFOLLOW);
+              try { await rollback.truncate(size); await rollback.sync(); }
+              finally { await rollback.close(); }
+              throw error;
             }
             return values;
           }
