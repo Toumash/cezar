@@ -1,43 +1,43 @@
 # Cezar documentation site
 
-A static reference for Cezar features, planned work, technical architecture, and three walkthroughs: a first task, Design Mode, and parallel tasks.
+The Cezar user documentation as a Next.js app ([Fumadocs](https://fumadocs.dev)): MDX pages in
+`content/docs`, full-text search, diagrams, and an `llms.txt` index for agents.
 
-## Preview
+The site has its own `package.json` and is **not** an npm workspace, so the repository's `npm ci`
+never downloads Next.js. The root scripts install it on demand.
+
+## Run it
 
 From the repository root:
 
-```sh
-python3 -m http.server 4173 --bind 127.0.0.1 --directory docs/site
+```bash
+npm run docs:dev     # http://localhost:4322/docs, reloads as you edit
+npm run docs:check   # content checks only: links, frontmatter, images, CEZ_* vars, style
+npm run docs:build   # checks, then a static export to docs/site/out/
+npm --prefix docs/site start   # serve the built out/ folder on port 4322
 ```
 
-Open http://127.0.0.1:4173/. Search and filters run in the browser. The site has no build step or server dependencies.
+`out/` is plain HTML, CSS, and JavaScript. Host it on any static file server; search runs in the
+browser from a prebuilt index.
 
-## Hosting
+## Layout
 
-Serve the contents of this directory from any static web server. Navigation uses URL fragments, so no route rewrites are required. Assets and copied guide links also work when the site is served from a subdirectory.
+| Path | What it is |
+| --- | --- |
+| `content/docs/` | The pages. File-system routing: `01-getting-started/02-first-task.mdx` → `/docs/getting-started/first-task`. |
+| `public/images/` | Screenshots used by pages. |
+| `lib/schema.ts` | The frontmatter contract (`title`, `description`, `nav_title`, `version`, `related`, `sources`). |
+| `lib/source.ts` | Loads the pages; strips `NN-` order prefixes from URLs; applies `nav_title`. |
+| `components/` | The MDX components pages may use (`Cards`, `Card`, `Mermaid`) and the page extras (version badge, related cards, sources). |
+| `scripts/check.mjs` | Checks the build cannot make. |
 
-The GitHub header fetches the public repository star count and caches it in the browser for one hour. If that request fails, it retains the last known count. Documentation search does not send queries to a server.
+## Writing pages
 
-## Content
-
-- `data.js`, `expanded.js`, `feature-copy.js`, and `audit-data.js` contain feature descriptions and source references.
-- `technical-data.js` contains architecture, configuration, workflow, and API reference articles.
-- `how-to-data.js` contains walkthroughs, examples, and troubleshooting notes.
-- `search.js` and `catalog.js` provide search, topic filters, and availability filters.
-- `diagrams.js`, `feature-diagrams.js`, and `visual-navigation.js` render diagrams and navigation cards.
-
-Entries distinguish Available, Opt-in, Experimental, and Planned behavior. Planned entries link to specifications. Source references retain the reviewed commit and, where available, line numbers; they do not imply that the latest release includes every feature.
-
-When changing a feature description, check its implementation and specification, update its status and source reference, and review its search terms. Keep walkthrough links consistent with feature IDs.
-
-## Checks
-
-```sh
-node docs/site/check.mjs
-```
-
-Also check search, filters, guide navigation, and diagram layout in a browser at desktop and mobile widths.
+Read the [docs contribution guide](content/docs/05-contributing/01-docs-contribution-guide.mdx).
+It adapts the [Next.js docs contribution guide](https://nextjs.org/docs/community/contribution-guide).
+Coding agents get the same rules from the `cezar-docs` skill (`.ai/skills/cezar-docs/SKILL.md`).
 
 ## Assets
 
-Fonts are stored locally with their license files in `fonts/`. Product screenshots come from this repository. The GitHub mark and its license are in `images/brands/`.
+Inter and JetBrains Mono are self-hosted in `app/fonts/`, with their licenses, so a build needs no
+font CDN. Product screenshots come from this repository.
