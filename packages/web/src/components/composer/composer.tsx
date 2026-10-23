@@ -92,6 +92,7 @@ export interface ComposerProps {
   footerEnd?: ReactNode
   /** The send button's accessible name. */
   sendAriaLabel?: string
+  sendLabel?: string
   /**
    * While the host's work is running, a Stop button sits where send does. With an empty box it is
    * the only button (an empty box over a working agent offers to stop it); once there is something
@@ -99,6 +100,8 @@ export interface ComposerProps {
    */
   stop?: { label: string; onStop: () => void; pending?: boolean }
   disabled?: boolean
+  /** Disable submission only, keeping the draft and footer controls interactive. */
+  submitDisabled?: boolean
   /** Shown as the placeholder while disabled — e.g. the legacy "Session closed — Continue to
    *  reopen." */
   disabledReason?: string
@@ -144,6 +147,15 @@ export interface ComposerHandle {
 
 const QUICK_REPLIES: Record<string, string> = { KeyA: 'Yes, approved.', KeyC: 'Continue.' }
 
+/** Every scrolled ancestor with its scrollTop, so the autosize pass can put them back. */
+function scrollAncestors(el: HTMLElement): Array<[Element, number]> {
+  const out: Array<[Element, number]> = []
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    if (node.scrollTop > 0) out.push([node, node.scrollTop])
+  }
+  return out
+}
+
 export function Composer({
   onSubmit,
   value,
@@ -155,8 +167,10 @@ export function Composer({
   footerStart,
   footerEnd,
   sendAriaLabel = 'Send',
+  sendLabel,
   stop,
   disabled = false,
+  submitDisabled = false,
   disabledReason = 'Session closed — Continue to reopen.',
   allowEmptySubmit = false,
   placeholder = 'Reply — / for skills, @ for files…',
@@ -337,8 +351,12 @@ export function Composer({
   useLayoutEffect(() => {
     const el = textareaRef.current
     if (!el) return
+    // The `auto` pass collapses the box for a moment; inside the task's sticky dock that shrinks
+    // the shared scroller, which clamps its scrollTop and jumps the thread on every keystroke.
+    const scrolled = scrollAncestors(el)
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`
+    for (const [node, top] of scrolled) if (node.scrollTop !== top) node.scrollTop = top
   }, [text])
 
   // ---- attachments ---------------------------------------------------------------------------
@@ -395,7 +413,7 @@ export function Composer({
       meta?: ComposerSubmitMeta,
     ) => {
       const body = messageText.trim()
-      if (disabled || busy) return
+      if (disabled || submitDisabled || busy) return
       if (body === '' && messageImages.length === 0 && !allowEmptySubmit) return
       setBusy(true)
       try {
@@ -426,10 +444,11 @@ export function Composer({
         setBusy(false)
       }
     },
-    [allowEmptySubmit, busy, disabled, onSubmit],
+    [allowEmptySubmit, busy, disabled, submitDisabled, onSubmit],
   )
 
   const submitDraft = useCallback(() => {
+    if (disabled || submitDisabled || busy) return
     if (text.trim() === '' && images.length === 0 && !allowEmptySubmit) return
     const draftText = text
     const draftImages = images
@@ -439,7 +458,7 @@ export function Composer({
     setImages([], 'submit')
     setTrigger(null)
     void send(draftText, draftImages, true)
-  }, [allowEmptySubmit, images, send, text])
+  }, [allowEmptySubmit, busy, disabled, submitDisabled, images, send, text])
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (menuOpen) {
@@ -688,15 +707,15 @@ export function Composer({
                 {!stop || text.trim() !== '' || images.length > 0 || allowEmptySubmit ? (
                   <Button
                     type="button"
-                    size="icon-sm"
+                    size={sendLabel ? "sm" : "icon-sm"}
                     aria-label={sendAriaLabel}
                     disabled={
-                      disabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
+                      disabled || submitDisabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
                     }
-                    className="size-8"
+                    className={sendLabel ? "h-8" : "size-8"}
                     onClick={submitDraft}
                   >
-                    <ArrowUpIcon aria-hidden="true" />
+                    <ArrowUpIcon aria-hidden="true" />{sendLabel}
                   </Button>
                 ) : null}
               </div>
