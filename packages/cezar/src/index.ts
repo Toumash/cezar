@@ -337,8 +337,6 @@ async function serveCommand(
   );
   if (recovered > 0) console.log(`  recovered ${recovered} run(s) from the previous session`);
 
-  const port = await pickStartupPort(preferredPort, process.env.CEZ_REMOTE === '1', bindHost);
-
   // Update discovery (#368) through the self-update service (PoC): the channel's newest
   // version lands on /api/v1/health as `latestVersion` for the chip, and the dialog behind the
   // chip can apply it when this cezar runs from the managed layout (`cezar install`).
@@ -383,6 +381,7 @@ async function serveCommand(
       'runs.total': runs.length,
     };
   });
+  const port = await pickStartupPort(preferredPort, process.env.CEZ_REMOTE === '1', bindHost);
   // SECURITY: cezar executes agents. A non-loopback bind exposes that box to
   // whatever can reach the interface, and cezar itself has NO auth — it is only
   // for a deliberate hosted setup where a reverse proxy in front provides TLS +
