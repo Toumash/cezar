@@ -56,7 +56,7 @@ vi.mock('../core/runner-factory.ts', () => ({
 }));
 
 type Internals = {
-  active: Map<string, { finishRequested?: boolean; acceptReviewOnDrop?: boolean; continueOnDrop?: unknown }>;
+  active: Map<string, { graphFinish?: () => void; finishRequested?: boolean; acceptReviewOnDrop?: boolean; continueOnDrop?: unknown }>;
   memoryPausing: Set<string>;
   armAutoResume: (runId: string, deadline: number) => void;
   scheduleAutoResumeIfLimited: (runId: string) => void;
@@ -151,6 +151,18 @@ describe('a message deferred while a run settles (telemetry 1408d7cb follow-up)'
     await settled(runId);
     expect(gate.specs).toHaveLength(1);
     expect(store.getRun(runId)?.steps.some((s) => s.id === 'continue-2')).toBe(false);
+  });
+
+  it('a run FINISHED at a workflow wait mid-gap is not continued', async () => {
+    const runId = await deferInSettleTail();
+    const finished = vi.fn();
+    internals().active.get(runId)!.graphFinish = finished;
+    expect(manager!.finish(runId)).toBe(true);
+    expect(finished).toHaveBeenCalledTimes(1);
+    releaseGate();
+    await undelivered(runId, 'the task was finished');
+    await settled(runId);
+    expect(gate.specs).toHaveLength(1);
   });
 
   it('a run MEMORY-PAUSED mid-gap is not continued', async () => {

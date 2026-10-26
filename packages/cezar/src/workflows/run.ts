@@ -526,6 +526,9 @@ interface ActiveRun {
   idleClosed?: boolean;
   /** The user pressed Finish on this owner; a repeat while it settles is the same request (6a3cecee). */
   finishRequested?: boolean;
+  /** Finish pressed at a graph wait — not `finishRequested`, which would also turn the settle into
+   *  `done`; read only by `deferredStopReason` so a held message does not resume the run. */
+  finishedAtWait?: boolean;
   /** Review accepted while the engine was still tearing down; `dropActive` applies it. */
   acceptReviewOnDrop?: boolean;
   /** The session is over and only teardown (the turn-end autosave) remains, so a record that
@@ -2411,7 +2414,7 @@ export class RunManager {
     if (state?.cancelled) return 'the run was cancelled';
     if (acceptReview) return 'the review was accepted';
     // A Continue taken in the same window supersedes a Finish, and its session flushes the buffer.
-    if (state?.finishRequested && !queuedContinue) return 'the task was finished';
+    if ((state?.finishRequested || state?.finishedAtWait) && !queuedContinue) return 'the task was finished';
     if (this.memoryPausing.has(runId)) return 'the task was paused for exceeding the memory limit';
     return undefined;
   }
@@ -4254,6 +4257,7 @@ export class RunManager {
     const state = this.active.get(runId);
     if (state?.graphFinish && !state.session?.open) {
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'finished by user at a workflow wait' });
+      state.finishedAtWait = true;
       state.graphFinish();
       return true;
     }
