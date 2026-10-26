@@ -916,6 +916,32 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ pi: { status: 'disconnected' } });
   });
 
+  // Telemetry f67df9d2: pi 0.73.1 with a piped stdin writes its whole answer to stderr, exit 0.
+  it.each([
+    [
+      'disconnected',
+      'No models available. Use /login to log into a provider via OAuth or API key. See:\n'
+        + '  /usr/lib/node_modules/@mariozechner/pi-coding-agent/docs/providers.md\n'
+        + '  /usr/lib/node_modules/@mariozechner/pi-coding-agent/docs/models.md\n',
+    ],
+    [
+      'connected',
+      'provider   model              context  max-out  thinking  images\n'
+        + 'anthropic  claude-sonnet-4-5  200K     64K      yes       yes\n',
+    ],
+  ] as const)('reads a pi 0.73 stderr-only answer as %s', async (expected, stderr) => {
+    const onInconclusive = vi.fn();
+    const service = new ProviderAuthService({
+      onInconclusive,
+      runCommand: runner((executable) => executable === 'pi'
+        ? { stdout: '', stderr, exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ pi: { status: expected } });
+    expect(onInconclusive).not.toHaveBeenCalledWith(expect.objectContaining({ provider: 'pi' }));
+  });
+
   it('does not guess from unrecognized pi model output', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable === 'pi'

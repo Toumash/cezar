@@ -359,7 +359,9 @@ function parseJunieStatus(_result: ProviderCommandResult): ProviderConnectionSta
 
 function parsePiStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   if (result.exitCode !== 0) return null;
-  const lines = normalizedLines(result.stdout);
+  // pi ≥ 0.73 reroutes stdout to stderr whenever stdin is not a TTY (`takeOverStdout` in its
+  // main.js), so the probe's whole answer arrives on stderr (telemetry f67df9d2, after #1548).
+  const lines = normalizedLines(result.stdout, result.stderr);
   if (lines.some((line) => /^provider\s+model\s+context\s+max-out\s+thinking\s+images$/.test(line))) {
     return 'connected';
   }
