@@ -38,6 +38,7 @@ import {
   type CodexUiMapperState,
 } from './codex-ui-mapper.ts';
 import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
+import { explainCodexModelError } from './agent-errors.ts';
 
 export interface CodexRunnerOptions {
   /** Override the binary name/path; defaults to `codex` on PATH. */
@@ -364,7 +365,7 @@ class CodexSession implements AgentSession {
         message: `codex: the follow-up did not reach the model and was dropped — the turn already in flight is still running: ${detail}`,
       };
     }
-    return { type: 'error', message: `codex: turn failed: ${detail}` };
+    return { type: 'error', message: `codex: turn failed: ${explainCodexModelError(detail, this.spec.model)}` };
   }
 
   end(): void {
@@ -631,7 +632,7 @@ class CodexSession implements AgentSession {
         const compacted = turnError === undefined && this.compactionEndedTurn;
         this.compactionEndedTurn = false;
         if (turnError !== undefined && !this.terminatedByCezar) {
-          this.emit({ type: 'error', message: turnError });
+          this.emit({ type: 'error', message: explainCodexModelError(turnError, this.spec.model) });
         }
         // The bare event when there is nothing extra to say, so every existing consumer
         // and every golden recording sees the exact frame it saw before (§7 additive).
