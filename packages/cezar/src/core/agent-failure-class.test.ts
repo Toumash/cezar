@@ -30,6 +30,7 @@ describe('classifyAgentFailure — the agent CLIs\' own words (telemetry fingerp
     // conversation state
     ['Request too large (max 32MB). Accumulated images and attachments in the conversation pushed the request over the limit. Remove older images or compact the conversation.', 'context_too_large'], // 13023969
     ['Prompt is too long', 'context_too_large'],
+    ['codex: ENOSPC: no space left on device, write', 'disk_full'], // 9cdcedc3
     ['Your input exceeds the context window of this model. (context_length_exceeded)', 'context_too_large'],
     // everything else
     ['exit code 1', 'other'],

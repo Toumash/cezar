@@ -29,6 +29,7 @@ import {
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
 import { describeReaped, reapTaskProcesses, taskProcessReapEnabled } from '../core/task-processes.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
+import { diskFullAgentErrorText } from '../disk-space.ts';
 import { accountStateHint, classifyAgentFailure, MAX_TRANSIENT_RETRIES, transientRetryDelayMs } from '../core/agent-failure-class.ts';
 import { reportAgentError } from '../runs/agent-error-telemetry.ts';
 import { createRunner } from '../core/runner-factory.ts';
@@ -3128,7 +3129,9 @@ export class RunManager {
     }
     this.armUsageLimitResume(run);
     // Account and conversation state is the user's to fix: say how, instead of a bare failure.
-    const hint = accountStateHint(failure, this.failedBackend(run), { resetKnown: parseUsageLimit(run.error) !== null });
+    const hint = failure === 'disk_full'
+      ? diskFullAgentErrorText(run.error ?? '', run.worktreePath ?? this.repoRoot) ?? undefined
+      : accountStateHint(failure, this.failedBackend(run), { resetKnown: parseUsageLimit(run.error) !== null });
     if (hint) this.store.appendEvent(runId, { type: 'lifecycle', message: hint });
   }
 

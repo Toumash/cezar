@@ -150,12 +150,17 @@ describe('reportAgentError', () => {
   });
 
   it('skips account and conversation state — task_failed counts it, the thread explains it', () => {
-    reportAgentError('codex', { type: 'error', message: 'You have hit your usage limit. Upgrade to continue.' });
-    reportAgentError('cursor', { type: 'error', message: "cursor agent exited with code 1 — ActionRequiredError: You've hit your usage limit Get Cursor Pro for more Agent usage, unlimited Tab, and more." });
     reportAgentError('claude', { type: 'error', message: 'Credit balance is too low' });
+    reportAgentError('codex', { type: 'session.error', message: 'ENOSPC: no space left on device, write' });
     reportAgentError('claude', { type: 'error', message: 'Failed to authenticate: OAuth session expired and could not be refreshed' });
     reportAgentError('claude', { type: 'error', message: 'Request too large (max 32MB). Accumulated images and attachments in the conversation pushed the request over the limit.' });
     expect(reported()).toEqual([]);
+  });
+
+  it('still reports a usage limit with no readable reset, in one coded group (a parser gap)', () => {
+    reportAgentError('codex', { type: 'error', message: 'You have hit your usage limit. Upgrade to continue.' });
+    reportAgentError('cursor', { type: 'error', message: "cursor agent exited with code 1 — ActionRequiredError: You've hit your usage limit Get Cursor Pro for more Agent usage, unlimited Tab, and more." });
+    expect(vi.mocked(reportError).mock.calls.map((call) => call[2]?.code)).toEqual(['usage_limit_unparsed', 'usage_limit_unparsed']);
   });
 
   it('holds a transient failure back until the run engine says it will not be retried', () => {

@@ -3,7 +3,7 @@ import { isClaudeMissingSessionError } from '../core/claude-cli-runner.ts';
 
 /** `task_failed`'s closed set (#1438): the label never carries the error text itself. */
 export type FailureKind =
-  | 'missing_session' | 'usage_limit' | 'auth' | 'billing' | 'context_too_large' | 'transient' | 'timeout' | 'other';
+  | 'missing_session' | 'usage_limit' | 'auth' | 'billing' | 'context_too_large' | 'disk_full' | 'transient' | 'timeout' | 'other';
 
 /** The prefixes `run.ts` puts in front of the agent's own error; line-anchored auth patterns need it bare. */
 const RUN_ERROR_PREFIX_RE = /^(?:continue failed: |step "[^"]*" failed: )/;

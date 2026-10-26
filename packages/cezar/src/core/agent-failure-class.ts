@@ -8,11 +8,12 @@
  * so every transient pattern names a phrasing an agent CLI really prints for a passing outage.
  */
 
+import { isDiskFullError } from '../disk-space.ts';
 import { isCopilotAuthFailure } from './copilot-ui-mapper.ts';
 import { isRuntimeProviderAuthFailure } from './provider-auth.ts';
 import { isUsageLimitMessage } from './usage-limit.ts';
 
-export type AgentFailureClass = 'transient' | 'auth' | 'billing' | 'usage_limit' | 'context_too_large' | 'other';
+export type AgentFailureClass = 'transient' | 'auth' | 'billing' | 'usage_limit' | 'context_too_large' | 'disk_full' | 'other';
 
 /** The prefixes `run.ts` puts in front of the agent's own error. */
 const RUN_ERROR_PREFIX_RE = /^(?:continue failed: |step "[^"]*" failed: )/;
@@ -49,6 +50,8 @@ const TRANSIENT_RES = [
 export function classifyAgentFailure(error: string | undefined): AgentFailureClass {
   const message = (error ?? '').replace(RUN_ERROR_PREFIX_RE, '');
   if (message === '') return 'other';
+  // The host, not the provider: a full disk (9cdcedc3) — retrying would only fail again.
+  if (isDiskFullError(message)) return 'disk_full';
   // Before auth: "Failed to refresh OAuth token" reads like a dead login and is not one.
   if (OAUTH_REFRESH_RACE_RE.test(message)) return 'transient';
   // Before usage_limit: "out of credits" is in its phrase set, but a top-up is not a reset window.

@@ -166,4 +166,14 @@ describe('a run stopped by a transient provider failure retries itself', () => {
       'the Claude Code account has run out of credit — top up its balance or switch this task to another account, then Continue',
     );
   }, 30_000);
+
+  it('a full disk is explained with the reclaim hint, not retried (9cdcedc3)', async () => {
+    manager = new RunManager(store, repoRoot);
+    const record = manager.startRun(QUICK_TASK_WORKFLOW, { task: 'mock:enospc ship it', worktree: false });
+    await settle(record.id);
+    const failed = store.getRun(record.id)!;
+    expect(failed.status).toBe('failed');
+    expect(failed.autoResumeAt).toBeUndefined();
+    expect(messages(record.id).some((m) => /the disk is full.*Reclaim now/.test(m))).toBe(true);
+  }, 30_000);
 });

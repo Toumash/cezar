@@ -18,6 +18,7 @@ describe('failureKind — task_failed closed set (#1438)', () => {
     ['session closed after 15m of inactivity', 'timeout'],
     ['Credit balance is too low', 'billing'],
     ['Request too large (max 32MB). Accumulated images and attachments in the conversation pushed the request over the limit.', 'context_too_large'],
+    ['ENOSPC: no space left on device, write', 'disk_full'],
     ['API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment.', 'transient'],
     ['Failed to authenticate: OAuth session expired and could not be refreshed', 'auth'],
     ['exit code 1', 'other'],
