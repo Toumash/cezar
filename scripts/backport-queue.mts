@@ -25,8 +25,12 @@ for (const pull of pulls) {
     const target = BACKPORT_LABEL.exec(label)?.[1];
     if (!target) continue;
     targets.add(target);
-    const state = await gh.pullStateByHead(backportBranch(pull.number, target));
-    if (state) existing.set(backportBranch(pull.number, target), state);
+    const branch = backportBranch(pull.number, target);
+    const state = await gh.pullStateByHead(branch);
+    if (state === 'closed' && (await gh.getBranchSha(branch)) !== null) {
+      console.log(`backport-queue: #${pull.number} → ${target} waits: its closed backport left ${branch}; delete that branch to re-run`);
+      existing.set(branch, 'closed-branch-kept');
+    } else if (state) existing.set(branch, state);
   }
 }
 const branches = new Set<string>();

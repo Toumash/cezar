@@ -20,7 +20,9 @@ export interface MergedPull {
   labels: readonly string[];
 }
 
-export type BackportState = 'open' | 'merged' | 'closed';
+/** `closed-branch-kept`: closed unmerged, but its branch still exists. The action would reuse
+ *  that stale branch (its push-failure recovery) rather than cherry-pick afresh, so it waits. */
+export type BackportState = 'open' | 'merged' | 'closed' | 'closed-branch-kept';
 
 export interface BackportJob {
   pr: number;
@@ -29,8 +31,8 @@ export interface BackportJob {
 
 /**
  * Every (PR, target) a label asks for that has no open or merged backport PR yet. A closed,
- * unmerged one does not count: the label still asks, so it is opened again (remove the label to
- * stop). Targets that do not exist as branches are skipped.
+ * unmerged one does not count once its branch is deleted: the label still asks, so it is opened
+ * again (remove the label to stop). Targets that do not exist as branches are skipped.
  */
 export function planBackports(input: {
   pulls: readonly MergedPull[];
@@ -44,7 +46,7 @@ export function planBackports(input: {
       const target = BACKPORT_LABEL.exec(label)?.[1];
       if (!target || target === pull.base || !input.branches.has(target)) continue;
       const state = input.existing.get(backportBranch(pull.number, target));
-      if (state === 'open' || state === 'merged') continue;
+      if (state !== undefined && state !== 'closed') continue;
       jobs.push({ pr: pull.number, target });
     }
   }

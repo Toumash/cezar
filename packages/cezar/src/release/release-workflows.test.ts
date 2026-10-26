@@ -46,7 +46,9 @@ describe('release workflows', () => {
     expect(wf.on.schedule).toHaveLength(1);
     expect(wf.on.pull_request_target).toBeUndefined();
     expect(String(wf.jobs.queue.if)).toMatch(/head\.repo\.full_name == github\.repository/);
-    expect(wf.concurrency).toEqual({ group: 'backport', 'cancel-in-progress': false });
+    expect(wf.concurrency['cancel-in-progress']).toBe(false);
+    // Only runs that scan share the group: a no-op run must not displace a waiting scan.
+    expect(String(wf.concurrency.group)).toMatch(/head\.repo\.full_name == github\.repository[\s\S]*'backport' \|\| format\('backport-noop-/);
     const action = steps(wf).find((s) => String(s.uses).startsWith('korthout/backport-action@'));
     expect(action.with.source_pr_number).toBe('${{ matrix.pr }}');
     expect(action.with.target_branches).toBe('${{ matrix.target }}');

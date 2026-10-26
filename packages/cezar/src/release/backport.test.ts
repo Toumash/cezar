@@ -25,6 +25,11 @@ describe('planBackports', () => {
     expect(plan(pulls, existing)).toEqual([{ pr: 3, target: LINE }]);
   });
 
+  it('holds a closed backport while its branch is kept — the action would reopen that stale branch', () => {
+    const pulls = [{ number: 4, base: 'main', labels: [`backport ${LINE}`] }];
+    expect(plan(pulls, [[backportBranch(4, LINE), 'closed-branch-kept']])).toEqual([]);
+  });
+
   it('forward-ports a line hotfix to main, never to the branch it merged into', () => {
     expect(plan([{ number: 9, base: LINE, labels: ['backport main', `backport ${LINE}`] }])).toEqual([{ pr: 9, target: 'main' }]);
   });

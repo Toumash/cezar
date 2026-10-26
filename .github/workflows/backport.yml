@@ -23,9 +23,15 @@ permissions:
   contents: read
 
 # Runs one at a time, so two triggers for the same merge never open two PRs: the second scan
-# sees the first's backport. GitHub keeps one waiting run; the scan is idempotent.
+# sees the first's backport. GitHub keeps one waiting run; the scan is idempotent. A run whose
+# queue job skips (an unmerged or fork PR's event) gets its own group, or it would displace a
+# waiting scan.
 concurrency:
-  group: backport
+  group: >-
+    ${{ (github.event_name != 'pull_request' ||
+         (github.event.pull_request.merged == true &&
+          github.event.pull_request.head.repo.full_name == github.repository))
+        && 'backport' || format('backport-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
