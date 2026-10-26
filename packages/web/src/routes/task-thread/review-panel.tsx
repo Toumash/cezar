@@ -86,7 +86,8 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
   // recovery) sends the notes to a dead session, and only the recovery — refetch, then deliver on
   // the live path — keeps them from bouncing back as a `run is still active` toast (77117b95).
   const continueWith = useCallback(
-    (text: string) => continueRun(run.id, { text, runner: continuation.runnerOverride }),
+    (text: string, _images: unknown, idempotencyKey?: string) =>
+      continueRun(run.id, { text, runner: continuation.runnerOverride, idempotencyKey }),
     [run.id, continuation.runnerOverride],
   )
   const deliverPrompt = useDeliverPrompt(run, continueWith, { surface: 'review' })

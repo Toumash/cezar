@@ -324,6 +324,33 @@ describe('useDeliverPrompt', () => {
     expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(2)
   })
 
+  it('a lost Continue that landed behind the teardown is not delivered a second time', async () => {
+    // The first Continue reached the server as a continueOnDrop: no step yet, so the record still
+    // reads `review`; the server refuses any OTHER Continue while the run unwinds, and the
+    // refetch after that refusal would find the run live and post the text again as a message.
+    let landedKey: string | undefined
+    const { sent, deliver } = await renderDeliver(run('review'), {
+      'POST /api/v1/runs/r1/continue': () => {
+        const body = sent[sent.length - 1]?.body as { idempotencyKey?: string }
+        if (landedKey === undefined) {
+          landedKey = body.idempotencyKey ?? ''
+          return unreachable()
+        }
+        return body.idempotencyKey && body.idempotencyKey === landedKey
+          ? jsonResponse({ continued: true })
+          : jsonResponse({ error: 'run is still active' }, 409)
+      },
+      'GET /api/v1/runs/r1': sequence(() => jsonResponse(run('review')), () => jsonResponse(run('running'))),
+    })
+
+    await expect(deliver('one more fix')).resolves.toEqual({ continued: true })
+    const attempts = posts(sent, '/api/v1/runs/r1/continue').map((r) => r.body as { idempotencyKey?: string })
+    expect(attempts).toHaveLength(2)
+    expect(attempts[0]?.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/)
+    expect(attempts[1]?.idempotencyKey).toBe(attempts[0]?.idempotencyKey)
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(0)
+  })
+
   it('a lost Continue the record shows as landed is never re-posted', async () => {
     const landed = run('review', {
       steps: [

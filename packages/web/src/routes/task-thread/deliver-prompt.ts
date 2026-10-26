@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useCallback } from 'react'
 
 import { ApiError, MESSAGE_RETRY_DELAYS_MS } from '@/api/client'
+import { uuidv7 } from '@/lib/sid'
 import { runQueryOptions, useSendMessage } from '@/api/queries'
 import type { ApiRun, AttachmentEntry, MessageSurface, RunStatus } from '@open-mercato/cezar-api-client'
 
@@ -108,8 +109,11 @@ export function useDeliverPrompt(
 
   return useCallback(
     async (text: string, images: AttachmentEntry[]) => {
+      // Every Continue re-post below carries the same key: one accepted behind the run's teardown
+      // (continueOnDrop) adds no step yet, so only the server's receipt can tell it already landed.
+      const continueKey = uuidv7()
       const deliver = async (path: DeliveryPath) => {
-        const result = await (path === 'live' ? sendMessageAsync({ text, images }) : continueWith(text, images))
+        const result = await (path === 'live' ? sendMessageAsync({ text, images }) : continueWith(text, images, continueKey))
         if (surface) trackMessageSent(surface)
         return result
       }
