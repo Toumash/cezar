@@ -2177,6 +2177,29 @@ describe('inconclusive probe reports', () => {
     expect(result.stdout).toContain('"sessionId":"s"');
   });
 
+  // Telemetry 5f52beba: Copilot 1.0.103 (Windows) answered session/new, then never exited on EOF;
+  // the timeout killed it and its complete answer was reported as a hang.
+  it('keeps an ACP answer whose server outlives EOF, and stops waiting for it to exit', async () => {
+    const lingering = [
+      "const rl = require('node:readline').createInterface({ input: process.stdin });",
+      "rl.on('line', (line) => { const { id } = JSON.parse(line);",
+      "  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result: id === 1 ? { sessionId: 's' } : {} }) + '\\n'); });",
+      'setInterval(() => {}, 1_000);',
+    ].join('\n');
+    const onInconclusive = vi.fn();
+    const service = new ProviderAuthService({
+      runCommand: async (executable, _args, _timeoutMs, _env, stdin) => executable === 'copilot'
+        ? defaultRunProviderCommand(process.execPath, ['-e', lingering], 8_000, undefined, stdin)
+        : { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' },
+      onInconclusive,
+    });
+    const started = Date.now();
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
+    expect(row?.status).toBe('connected');
+    expect(onInconclusive).not.toHaveBeenCalled();
+    expect(Date.now() - started).toBeLessThan(6_000);
+  }, 20_000);
+
   // 298c2e1f regressed in 0.16.1: the CLI then exits 0 on EOF with only `initialize` answered,
   // which read as unrecognized output and never got the longer re-ask a timeout gets.
   it('closes a held-open stdin before the timeout and calls the missing answer a timeout', async () => {

@@ -600,7 +600,9 @@ export function defaultRunProviderCommand(
   const cwd = probeCwdFallback();
   return new Promise((resolve) => {
     let closeTimer: NodeJS.Timeout | undefined;
+    let lingerTimer: NodeJS.Timeout | undefined;
     let closedUnanswered = false;
+    let answered = false;
     const child = execFile(
       file,
       argv,
@@ -616,6 +618,7 @@ export function defaultRunProviderCommand(
       },
       (error, stdout, stderr) => {
         clearTimeout(closeTimer);
+        clearTimeout(lingerTimer);
         const commandError = error as (NodeJS.ErrnoException & {
           killed?: boolean;
           signal?: string | null;
@@ -623,9 +626,10 @@ export function defaultRunProviderCommand(
         const code = commandError?.code;
         // A held-open stdin closed by the timer means the answer never came: the CLI then exits 0
         // on EOF, which read as an unrecognized answer and skipped the longer re-ask (298c2e1f).
-        const timedOut = commandError?.code === 'ETIMEDOUT'
+        // An answer in hand is not a hang, however the CLI then failed to exit (telemetry 5f52beba).
+        const timedOut = !answered && (commandError?.code === 'ETIMEDOUT'
           || (commandError?.killed === true && commandError.signal === 'SIGTERM')
-          || (closedUnanswered && !stdin?.closeWhen?.(String(stdout)));
+          || (closedUnanswered && !stdin?.closeWhen?.(String(stdout))));
         resolve({
           stdout: String(stdout),
           stderr: String(stderr),
@@ -654,7 +658,12 @@ export function defaultRunProviderCommand(
     };
     const onData = (chunk: Buffer | string): void => {
       seen += String(chunk);
-      if (closeWhen(seen)) close();
+      if (!closeWhen(seen)) return;
+      answered = true;
+      close();
+      // Copilot 1.0.103 on Windows answered session/new and then outlived EOF until cezar's
+      // timeout killed it, twice, and the answer was reported as a hang (telemetry 5f52beba).
+      lingerTimer = setTimeout(() => child.kill(), STDIN_CLOSE_MARGIN_MS);
     };
     output.on('data', onData);
     closeTimer = setTimeout(() => {
