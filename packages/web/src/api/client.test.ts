@@ -621,6 +621,36 @@ describe('createRunPr survives a lost response', () => {
   })
 })
 
+/** telemetry 2e454012: the connection dropped after the headers, while the body was read. */
+describe('a body lost mid-read', () => {
+  const headersThenDrop = () => {
+    const res = new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+    vi.spyOn(res, 'text').mockRejectedValue(new TypeError('Failed to fetch'))
+    return res
+  }
+
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('is the same ApiError(0) as a request that never answered, not a bare TypeError', async () => {
+    fetchMock.mockResolvedValue(headersThenDrop())
+    const error = await getHealth().catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).status).toBe(0)
+  })
+
+  it('a message whose answer was lost is re-posted under its key, and the server dedupes it', async () => {
+    fetchMock
+      .mockResolvedValueOnce(headersThenDrop())
+      .mockResolvedValueOnce(new Response(JSON.stringify({ delivered: true }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const result = sendMessage('run-1', { text: 'hi', idempotencyKey: KEY })
+    await vi.runAllTimersAsync()
+    await expect(result).resolves.toEqual({ delivered: true })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(lastCall().body).toEqual({ text: 'hi', images: [], idempotencyKey: KEY })
+  })
+})
+
 describe('errors', () => {
   function fail(status: number, body: string, contentType = 'application/json'): void {
     fetchMock.mockResolvedValue(

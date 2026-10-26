@@ -364,11 +364,26 @@ const init = (opts?: ReadOptions) => ({ init: { signal: opts?.signal } })
  * resolves to a branded error type rather than to `never`, which would have been assignable to
  * every caller's declared return type and failed only at runtime.
  */
+/**
+ * A response's body, where a connection that drops AFTER the headers is the same `ApiError(0)` as
+ * one that never answered — not the bare `TypeError: Failed to fetch` it would otherwise escape
+ * `fetchOrThrow` as (telemetry 2e454012), unreported and never retried.
+ */
+async function readBody(res: { text(): Promise<string>; url: string }): Promise<string> {
+  try {
+    return await res.text()
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
+    noteFailedRequest(res.url, undefined, 0, undefined, cause)
+    throw new ApiError(0, `cannot reach the cezar server (${res.url})`, { cause })
+  }
+}
+
 export async function unwrap<R extends ClientResponse<unknown, number, ResponseFormat>>(
   res: R,
   label: string,
 ): Promise<OkJson<R>> {
-  const body = await res.text()
+  const body = await readBody(res)
   if (!res.ok) throw errorFor(res.status, res.statusText, body)
   const parsed = parseJson(body)
   if (parsed === undefined) {
@@ -465,7 +480,7 @@ async function requestText(path: string, init: RequestInit = {}): Promise<string
   const headers = new Headers(init.headers)
   headers.set('accept', 'text/plain')
   const res = await send(path, { ...init, headers })
-  const body = await res.text()
+  const body = await readBody(res)
   if (!res.ok) throw errorFor(res.status, res.statusText, body)
   return body
 }
@@ -956,7 +971,7 @@ export async function getWorkspaceSecrets(opts?: ReadOptions): Promise<SecretsLi
 }
 /** Every write answers 204, which has no body for `unwrap` to parse — only the status matters. */
 async function expectNoContent(res: Response): Promise<void> {
-  if (!res.ok) throw errorFor(res.status, res.statusText, await res.text())
+  if (!res.ok) throw errorFor(res.status, res.statusText, await readBody(res))
 }
 export async function saveProjectSecret(name: string, input: SecretValueInput): Promise<void> {
   await expectNoContent(await cez.api.v1.p[':projectId'].secrets[':name'].$put(
@@ -1360,7 +1375,7 @@ export async function registerProject(root: string): Promise<RegisterProjectResp
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ root }),
   })
-  const body = await res.text()
+  const body = await readBody(res)
   const parsed = parseJson(body)
   const project = (parsed as { project?: unknown } | undefined)?.project
   if ((res.ok || res.status === 409) && project !== undefined && project !== null) {
@@ -2311,7 +2326,7 @@ export async function deleteAutomation(id: string, expectedRevision?: number): P
     param: { projectId: queryScope(), id: encodeURIComponent(id) },
       query: expectedRevision ? { expectedRevision: String(expectedRevision) } : {},
   })
-  if (!res.ok) throw errorFor(res.status, res.statusText, await res.text())
+  if (!res.ok) throw errorFor(res.status, res.statusText, await readBody(res))
 }
 
 /** The other registered projects' automations, as the editor's template palette lists them
