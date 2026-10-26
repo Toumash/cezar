@@ -339,7 +339,7 @@ export class ClaudeCliRunner implements AgentRunner {
       const text = textChunks.join('\n').trim();
 
       if (timedOut) {
-        onEvent?.({ type: 'error', message: inactivityTimeoutMessage('claude CLI', limitMs) });
+        onEvent?.({ type: 'error', message: inactivityTimeoutMessage('claude CLI', limitMs, deadline.expiredBy) });
         onEvent?.({ type: 'done' });
         return { text, toolCalls, tokensUsed, sessionId: spec.sessionId };
       }

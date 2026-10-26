@@ -246,7 +246,7 @@ export class PiRunner implements AgentRunner {
       const exitCode = await waitForExit(child);
       if (spawnError) throw spawnError;
       if (timedOut) {
-        const message = inactivityTimeoutMessage('pi CLI', limitMs);
+        const message = inactivityTimeoutMessage('pi CLI', limitMs, deadline.expiredBy);
         onEvent?.({ type: 'error', message });
         onEvent?.({ type: 'done' });
         return { text: textChunks.join('\n').trim(), toolCalls, tokensUsed, sessionId };

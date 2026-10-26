@@ -282,7 +282,7 @@ export class CursorAgentRunner implements AgentRunner {
       if (spawnFailed) throw spawnFailed;
 
       if (timedOut) {
-        onEvent?.({ type: 'error', message: inactivityTimeoutMessage('cursor agent', limitMs) });
+        onEvent?.({ type: 'error', message: inactivityTimeoutMessage('cursor agent', limitMs, deadline.expiredBy) });
         onEvent?.({ type: 'done' });
         return { text, toolCalls, tokensUsed, sessionId };
       }

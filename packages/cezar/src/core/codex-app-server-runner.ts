@@ -268,7 +268,7 @@ class CodexSession implements AgentSession {
       };
 
       if (this.timedOut) {
-        this.emit({ type: 'error', message: inactivityTimeoutMessage('codex app-server', limitMs) });
+        this.emit({ type: 'error', message: inactivityTimeoutMessage('codex app-server', limitMs, deadline.expiredBy) });
         this.emit({ type: 'done' });
         return base;
       }

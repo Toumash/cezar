@@ -285,7 +285,7 @@ class CopilotAcpSession implements AgentSession {
     });
 
     if (this.timedOut) {
-      this.emit({ type: 'error', message: inactivityTimeoutMessage('Copilot CLI', this.limitMs) });
+      this.emit({ type: 'error', message: inactivityTimeoutMessage('Copilot CLI', this.limitMs, this.deadline.expiredBy) });
       this.emit({ type: 'done' });
       return summary();
     }

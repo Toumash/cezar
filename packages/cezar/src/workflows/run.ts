@@ -569,7 +569,7 @@ interface ActiveRun {
    *  - `'waiting'` — live: the session is open and an answer or monitored work is still expected.
    *    `execute` sits inside `runAgentStep` for as long as that holds, so seeing
    *    this value after the step loop means the session closed WITHOUT an answer
-   *    (the idle timer, the wall clock, a crash) and the run settles `failed`.
+   *    (the idle timer, the runner timeout, a crash) and the run settles `failed`.
    *  - `'abandoned'` — the user pressed Finish instead of answering: "stop here",
    *    so the run settles like any other finished run.
    *
@@ -5531,7 +5531,7 @@ export class RunManager {
         error: runError,
         finishedAt,
         currentStepId: undefined,
-        // A crash or a wall-clock timeout while parked on a question does not answer it either.
+        // A crash or a runner timeout while parked on a question does not answer it either.
         ...(askPark === 'waiting' ? { awaitingAnswerSince: finishedAt } : {}),
       });
       emit({ type: 'lifecycle', message: `run failed — ${runError}` });
@@ -7166,11 +7166,12 @@ export class RunManager {
           model: backendModel,
           sessionId: launchSessionId,
           resume,
-          // Interactive sessions have no wall clock — the idle timer rules.
+          // Interactive sessions have no runner timeout — the idle timer rules.
           //
-          // A non-final step keeps its wall clock (`DEFAULT_RUN_TIMEOUT_MS`)
-          // even though it may now park on a `CEZ:ASK` and sit open waiting for
-          // an answer (#917). Dropping it for every intermediate step is the
+          // A non-final step keeps the runner's timeout (`DEFAULT_RUN_TIMEOUT_MS`
+          // of silence, with a hard ceiling behind it — cf2191f1) even though it
+          // may now park on a `CEZ:ASK` and sit open waiting for an answer (#917).
+          // Dropping it for every intermediate step is the
           // wrong trade: it would leave a runaway step with nothing to stop it,
           // to buy a park that is bounded by the 15-minute idle timer first in
           // all but the longest steps. What matters is that neither expiry can

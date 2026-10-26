@@ -262,7 +262,7 @@ class OpencodeSession implements AgentSession {
         sessionId: this.sessionId ?? spec.sessionId,
       };
       if (this.timedOut) {
-        this.emit({ type: 'error', message: inactivityTimeoutMessage('opencode', limitMs) });
+        this.emit({ type: 'error', message: inactivityTimeoutMessage('opencode', limitMs, this.deadline.expiredBy) });
       }
       this.emit({ type: 'done' });
       return base;

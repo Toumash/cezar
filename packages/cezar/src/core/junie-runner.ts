@@ -232,7 +232,7 @@ class JunieSession implements AgentSession {
       };
 
       if (this.timedOut) {
-        this.emit({ type: 'error', message: inactivityTimeoutMessage('junie', limitMs) });
+        this.emit({ type: 'error', message: inactivityTimeoutMessage('junie', limitMs, deadline.expiredBy) });
         this.emit({ type: 'done' });
         return base;
       }
