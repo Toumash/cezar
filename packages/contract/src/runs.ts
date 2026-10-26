@@ -1243,6 +1243,24 @@ export const messageInputSchema = z
 export type MessageInput = z.input<typeof messageInputSchema>;
 
 /**
+ * `POST /runs/:id/continue` ("Continue"/"Send back", spec 003 / #401): every field optional, so an
+ * empty POST reopens the last session on the run's current backend. A runner/model/account
+ * override picks the engine for the continuation; `text`/`images` bound like a live message's.
+ */
+export const continueInputSchema = z.object({
+  text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
+  images: attachmentListSchema.optional(),
+  runner: runnerSchema.optional(),
+  model: z.string().max(200).optional(),
+  /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = keep the
+   *  account the run is already on. */
+  agentProfile: z.string().max(64).optional(),
+  /** One per Continue, reused by its retries: a key that already landed is not continued again. */
+  idempotencyKey: z.string().uuid().optional(),
+});
+export type ContinueInput = z.input<typeof continueInputSchema>;
+
+/**
  * `PATCH /runs/:id` (#389). `title` is trimmed server-side, 1–300 chars, and the edit sets both
  * `title` and `titleSummary` so it wins over any auto-summary. `task` (#472) is the initial
  * prompt, editable only while the run is still queued — any other status answers
