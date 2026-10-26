@@ -30,6 +30,7 @@ import { useDeliverPrompt } from './deliver-prompt'
 import { MESSAGE_TEXT_MAX, messageWithReview, type DiffComments } from './diff-comments'
 import { useDraft } from './thread-draft'
 import { useFinishRun } from './use-finish-run'
+import { writeClipboard } from '@/lib/clipboard'
 
 /**
  * The review gate (spec 009, §"Task thread" review bullet) on the new surface — cezar's core
@@ -275,8 +276,7 @@ function ManualMergeLine({ command }: { command: string }) {
       data-slot="review-manual"
       title="Copy the command"
       onClick={() => {
-        void navigator.clipboard
-          .writeText(command)
+        void writeClipboard(command)
           .then(() => toast('Command copied to clipboard.'))
           .catch(() => toast(`Run manually: ${command}`))
       }}
