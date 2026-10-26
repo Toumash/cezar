@@ -102,6 +102,7 @@ const textFile = (name: string, type: string, body = 'hello') =>
 const paste = (textarea: HTMLTextAreaElement, files: File[]) =>
   fireEvent.paste(textarea, {
     clipboardData: {
+      getData: () => '',
       // `kind` is what a real DataTransferItem carries and what the composer filters on (#950):
       // a pasted `.md` is a file item whose type is not `image/*`.
       items: files.map((file) => ({ kind: 'file', type: file.type, getAsFile: () => file })),
@@ -202,6 +203,62 @@ describe('failure restores the draft (nothing the user typed is ever lost)', () 
     type(textarea, 'meanwhile')
     reject(new Error('boom'))
     await waitFor(() => expect(textarea.value).toBe('first message\nmeanwhile'))
+  })
+})
+
+describe('plain-text paste snapshot', () => {
+  it('inserts the paste payload once when the browser supplies no later paste input', () => {
+    const { textarea, onSubmit } = renderComposer()
+    textarea.focus()
+    type(textarea, 'before OLD after')
+    textarea.setSelectionRange(7, 10)
+    // Model the native insertText command, including its input event; jsdom has no editor.
+    const insert = vi.fn((_command: string, _showUi: boolean, text: string) => {
+      const next = textarea.value.slice(0, textarea.selectionStart) + text + textarea.value.slice(textarea.selectionEnd)
+      fireEvent.input(textarea, { target: { value: next }, inputType: 'insertText' })
+      return true
+    })
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: insert })
+    try {
+      const allowed = fireEvent.paste(textarea, { clipboardData: {
+        items: [], getData: () => 'dictated text',
+      } })
+      expect(textarea.value).toBe('before dictated text after')
+      expect(allowed).toBe(false)
+      expect(insert).toHaveBeenCalledWith('insertText', false, 'dictated text')
+      expect(onSubmit).not.toHaveBeenCalled()
+    } finally {
+      Reflect.deleteProperty(document, 'execCommand')
+    }
+  })
+
+  it('keeps the draft when the editor inserts without emitting input', () => {
+    const { textarea, onSubmit } = renderComposer()
+    textarea.focus()
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, 'dictated text')
+      return true
+    } })
+    try {
+      fireEvent.paste(textarea, { clipboardData: { items: [], getData: () => 'dictated text' } })
+      fireEvent.keyDown(textarea, { key: 'Enter' })
+      expect(onSubmit).toHaveBeenCalledWith('dictated text', [])
+    } finally {
+      Reflect.deleteProperty(document, 'execCommand')
+    }
+  })
+
+  it.each(['false', 'throws', 'missing'])('leaves native paste available when the editor command is %s', (mode) => {
+    const { textarea } = renderComposer()
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: mode === 'missing' ? undefined : () => {
+      if (mode === 'throws') throw new Error('Unsupported editing command')
+      return false
+    } })
+    try {
+      expect(fireEvent.paste(textarea, { clipboardData: { items: [], getData: () => 'text' } })).toBe(true)
+    } finally {
+      Reflect.deleteProperty(document, 'execCommand')
+    }
   })
 })
 

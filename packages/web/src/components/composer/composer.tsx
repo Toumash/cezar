@@ -398,15 +398,31 @@ export function Composer({
     [disabled],
   )
 
-  const onPaste = (event: ClipboardEvent) => {
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const text = event.clipboardData.getData('text/plain')
     // `kind: 'file'` rather than an `image/` type test (#950): the clipboard carries a pasted
-    // `.md` as a file item too, and `screenFiles` is what decides whether cezar takes it. The
-    // text half of the clipboard is left alone so an ordinary ⌘V still types.
+    // `.md` as a file item too. File pastes remain attachments even when they also carry text.
     const files = [...(event.clipboardData?.items ?? [])]
       .filter((item) => item.kind === 'file')
       .map((item) => item.getAsFile())
       .filter((file): file is File => file !== null)
-    if (files.length === 0) return
+    if (files.length === 0) {
+      // Wispr can deliver text in `paste` but no text in Chrome's subsequent native paste.
+      // This legacy editing API preserves native undo; direct value assignment does not.
+      if (text && typeof document.execCommand === 'function') {
+        let inserted = false
+        try {
+          inserted = document.execCommand('insertText', false, text)
+        } catch { /* Leave native paste available when the editing command is unavailable. */ }
+        if (inserted) {
+          event.preventDefault()
+          // Some browsers omit `input` for execCommand; keep the controlled draft in sync.
+          if (textRef.current !== event.currentTarget.value) setText(event.currentTarget.value)
+          syncTrigger()
+        }
+      }
+      return
+    }
     event.preventDefault()
     addFiles(files, 'clipboard')
   }

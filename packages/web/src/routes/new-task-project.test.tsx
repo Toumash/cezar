@@ -231,6 +231,7 @@ const pngFile = (name = 'shot.png', bytes: number[] = [1, 2, 3]) =>
 const paste = (target: HTMLTextAreaElement, files: File[]) =>
   fireEvent.paste(target, {
     clipboardData: {
+      getData: () => '',
       items: files.map((file) => ({ kind: 'file', type: file.type, getAsFile: () => file })),
     },
   })
