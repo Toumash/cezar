@@ -317,6 +317,8 @@ import {
   type TelemetryConsentPayload,
 } from '@open-mercato/cezar-contract';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
+import { MessageReceipts } from './message-receipts.ts';
+import type { MessageResponse } from '@open-mercato/cezar-contract';
 import {
   providerForActiveRun,
   providerForExistingRun,
@@ -1039,10 +1041,14 @@ const messageSchema = z
   .object({
     text: z.string().max(100_000).default(''),
     images: attachmentListSchema.default([]),
+    idempotencyKey: z.string().uuid().optional(),
   })
   .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
     message: 'message needs text or at least one attachment',
   });
+
+// Run ids are unique across projects, so one workspace-wide receipt book serves every mount.
+const messageReceipts = new MessageReceipts<MessageResponse>();
 
 // PATCH semantics are load-bearing here: an omitted field keeps its current value.
 // In particular, the cockpit edits text without re-uploading existing attachments.
@@ -4997,65 +5003,73 @@ export function createApp(deps: ServerDeps) {
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
       const parsed = { data: c.req.valid('json') };
-      // Stacking onto a queued prompt mutates an existing task and invokes no provider.
-      // Provider availability still gates live delivery after the record leaves `queued`, but
-      // must not strand prompt authoring just because an unrelated fallback provider is
-      // disconnected (provider-auth spec: disabling never blocks existing-task mutations).
-      // In the dequeue race, the ladder below safely turns this into a starting-state buffer.
-      if (run.status !== 'queued') {
-        const blocked = await providerActionError([providerForActiveRun(run)], {
-          repoRoot,
-          profileFor: (provider) => recordedProfileFor(run, provider),
-        });
-        if (blocked) return c.json({ error: blocked }, 409);
-      }
-      const attachments = resolveAttachments(parsed.data.images);
-      if (typeof attachments === 'string') return c.json({ error: attachments }, 400);
-      const content: PastedContent[] = [
-        ...attachments,
-        ...(parsed.data.text.trim() ? [{ type: 'text', text: parsed.data.text } satisfies ContentBlock] : []),
-      ];
-      // Three-rung delivery ladder (#472). Branch on the ENGINE's answer rather
-      // than a status read here: the handler cannot observe the dequeue safely
-      // (the record is written a tick later), the engine can.
-      //   live session → delivered · still queued → folded into the prompt
-      //   starting up or between sessions → buffered (1408d7cb) · anything else → 409
-      if (manager.sendMessage(id, content)) return c.json({ delivered: true });
+      // A retried POST whose first attempt already landed answers as it did (message-receipts.ts).
+      const receipt = parsed.data.idempotencyKey ? await messageReceipts.claim(`${id}:${parsed.data.idempotencyKey}`) : undefined;
+      if (receipt && 'prior' in receipt) return c.json(receipt.prior);
+      let answered: MessageResponse | undefined;
+      try {
+        // Stacking onto a queued prompt mutates an existing task and invokes no provider.
+        // Provider availability still gates live delivery after the record leaves `queued`, but
+        // must not strand prompt authoring just because an unrelated fallback provider is
+        // disconnected (provider-auth spec: disabling never blocks existing-task mutations).
+        // In the dequeue race, the ladder below safely turns this into a starting-state buffer.
+        if (run.status !== 'queued') {
+          const blocked = await providerActionError([providerForActiveRun(run)], {
+            repoRoot,
+            profileFor: (provider) => recordedProfileFor(run, provider),
+          });
+          if (blocked) return c.json({ error: blocked }, 409);
+        }
+        const attachments = resolveAttachments(parsed.data.images);
+        if (typeof attachments === 'string') return c.json({ error: attachments }, 400);
+        const content: PastedContent[] = [
+          ...attachments,
+          ...(parsed.data.text.trim() ? [{ type: 'text', text: parsed.data.text } satisfies ContentBlock] : []),
+        ];
+        // Three-rung delivery ladder (#472). Branch on the ENGINE's answer rather
+        // than a status read here: the handler cannot observe the dequeue safely
+        // (the record is written a tick later), the engine can.
+        //   live session → delivered · still queued → folded into the prompt
+        //   starting up or between sessions → buffered (1408d7cb) · anything else → 409
+        if (manager.sendMessage(id, content)) return c.json((answered = { delivered: true as const }));
 
-      const currentRun = store.getRun(id);
-      const stack = currentRun?.queuedMessages ?? [];
-      // Bounds apply only to a message that is actually about to be stacked. Without this
-      // gate an over-long message posted to a *finished* run would answer `400 prompt too
-      // long` when the truthful answer is `409 session closed`. The status read is safe
-      // here because it only decides whether to reject EARLY — `enqueueMessage` still
-      // re-checks against the engine's own queue before writing anything.
-      if (currentRun?.status === 'queued') {
-        if (stack.length >= MAX_QUEUED_MESSAGES) {
-          return c.json({ error: `too many queued messages — ${MAX_QUEUED_MESSAGES} message limit` }, 400);
+        const currentRun = store.getRun(id);
+        const stack = currentRun?.queuedMessages ?? [];
+        // Bounds apply only to a message that is actually about to be stacked. Without this
+        // gate an over-long message posted to a *finished* run would answer `400 prompt too
+        // long` when the truthful answer is `409 session closed`. The status read is safe
+        // here because it only decides whether to reject EARLY — `enqueueMessage` still
+        // re-checks against the engine's own queue before writing anything.
+        if (currentRun?.status === 'queued') {
+          if (stack.length >= MAX_QUEUED_MESSAGES) {
+            return c.json({ error: `too many queued messages — ${MAX_QUEUED_MESSAGES} message limit` }, 400);
+          }
+          const stackedImages = stack.reduce((n, m) => n + (m.images?.length ?? 0), 0);
+          if (stackedImages + parsed.data.images.length > MAX_QUEUED_ATTACHMENTS) {
+            return c.json({ error: `too many queued attachments — ${MAX_QUEUED_ATTACHMENTS} attachment limit across the stack` }, 400);
+          }
+          const opening = [...(currentRun.taskImages ?? []), ...stack.flatMap((m) => m.images ?? [])];
+          if (queuedImageChars(dataDir, id, opening) + imageChars(attachments) > MAX_ATTACHMENTS_TOTAL_BASE64) {
+            return c.json({ error: QUEUED_IMAGES_TOO_LARGE }, 400);
+          }
+          const prospective = foldedLength(currentRun.task, [...stack, { text: parsed.data.text }]);
+          if (prospective > MAX_FOLDED_TASK_CHARS) {
+            return c.json(
+              {
+                error: `prompt too long — ${MAX_FOLDED_TASK_CHARS} character limit across the task and its queued messages (would be ${prospective})`,
+              },
+              400,
+            );
+          }
         }
-        const stackedImages = stack.reduce((n, m) => n + (m.images?.length ?? 0), 0);
-        if (stackedImages + parsed.data.images.length > MAX_QUEUED_ATTACHMENTS) {
-          return c.json({ error: `too many queued attachments — ${MAX_QUEUED_ATTACHMENTS} attachment limit across the stack` }, 400);
-        }
-        const opening = [...(currentRun.taskImages ?? []), ...stack.flatMap((m) => m.images ?? [])];
-        if (queuedImageChars(dataDir, id, opening) + imageChars(attachments) > MAX_ATTACHMENTS_TOTAL_BASE64) {
-          return c.json({ error: QUEUED_IMAGES_TOO_LARGE }, 400);
-        }
-        const prospective = foldedLength(currentRun.task, [...stack, { text: parsed.data.text }]);
-        if (prospective > MAX_FOLDED_TASK_CHARS) {
-          return c.json(
-            {
-              error: `prompt too long — ${MAX_FOLDED_TASK_CHARS} character limit across the task and its queued messages (would be ${prospective})`,
-            },
-            400,
-          );
-        }
-      }
 
-      const queued = manager.enqueueMessage(id, content);
-      if (queued) return c.json({ queued: true, message: queued });
-      if (manager.deferMessage(id, content)) return c.json({ deferred: true });
-      return c.json({ error: 'session closed' }, 409);
+        const queued = manager.enqueueMessage(id, content);
+        if (queued) return c.json((answered = { queued: true as const, message: queued }));
+        if (manager.deferMessage(id, content)) return c.json((answered = { deferred: true as const }));
+        return c.json({ error: 'session closed' }, 409);
+      } finally {
+        if (receipt && 'settle' in receipt) receipt.settle(answered);
+      }
     })
 
     // Edit / remove a stacked message (#472). Registered before any conflicting

@@ -48,6 +48,9 @@ import {
 } from './client'
 import { setApiBaseUrl, setApiScope } from '@open-mercato/cezar-api-client'
 
+/** A message's idempotency key (telemetry 1a212342) — fixed here so the request shape is exact. */
+const KEY = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e0f'
+
 /** The one seam under test: every call must go through `fetch` and nothing else. */
 const fetchMock = vi.fn<typeof fetch>()
 
@@ -305,19 +308,19 @@ describe('request shapes', () => {
     },
     {
       name: 'sendMessage',
-      call: () => sendMessage('run-1', { text: 'hi' }),
+      call: () => sendMessage('run-1', { text: 'hi', idempotencyKey: KEY }),
       path: '/api/v1/runs/run-1/messages',
       method: 'POST',
       // The server's schema defaults both, but an absent `images` and `[]` are the same
       // request — send the shape the endpoint documents rather than half of it.
-      body: { text: 'hi', images: [] },
+      body: { text: 'hi', images: [], idempotencyKey: KEY },
     },
     {
       name: 'sendMessage (images only)',
-      call: () => sendMessage('run-1', { images: [{ mediaType: 'image/png', data: 'AAA' }] }),
+      call: () => sendMessage('run-1', { images: [{ mediaType: 'image/png', data: 'AAA' }], idempotencyKey: KEY }),
       path: '/api/v1/runs/run-1/messages',
       method: 'POST',
-      body: { text: '', images: [{ mediaType: 'image/png', data: 'AAA' }] },
+      body: { text: '', images: [{ mediaType: 'image/png', data: 'AAA' }], idempotencyKey: KEY },
     },
   ]
 

@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useCallback } from 'react'
 
-import { ApiError } from '@/api/client'
+import { ApiError, MESSAGE_RETRY_DELAYS_MS } from '@/api/client'
 import { runQueryOptions, useSendMessage } from '@/api/queries'
 import type { ApiRun, AttachmentEntry, MessageSurface, RunStatus } from '@open-mercato/cezar-api-client'
 
@@ -33,8 +33,9 @@ import { trackMessageSent } from '@/lib/telemetry'
  *    the transitional refusals, retried on a bounded backoff (`SESSION_GAP_RETRY_DELAYS_MS`): the
  *    live path's `session closed` (a `running` run between sessions) and the Continue path's
  *    `run is still active` (a run whose record already settled while the engine still unwinds it);
- *  - re-post a request that got no answer at all, unless a fresh record proves it never landed.
- *    Only Continue can prove that: an accepted one adds its step synchronously (7adbfbd7);
+ *  - re-post a request that got no answer at all, unless it provably cannot land twice: a Continue
+ *    when a fresh record shows no new step (an accepted one adds its step synchronously, 7adbfbd7);
+ *    a live message by its idempotency key, which `sendMessage` re-posts itself (1a212342);
  *  - reopen a session for an EMPTY draft that a fresh record AGREES is settled — a genuine
  *    refusal. But an EMPTY draft whose refusal is `run is still active` is the opposite: the
  *    refetch proves the run is live already, which is the state the one-click Continue asked
@@ -121,8 +122,12 @@ export function useDeliverPrompt(
         firstError = error
       }
       // No answer at all (status 0: a dropped socket, a restarting server). Re-post a Continue only
-      // when the fresh record still shows no new continuation step, so it cannot land twice.
-      if (attempted === 'continue' && firstError instanceof ApiError && firstError.status === 0) {
+      // when the fresh record still shows no new continuation step, so it cannot land twice — a
+      // few times, since each failure retires only one stale pooled socket (f3d02411).
+      for (let attempt = 0; attempted === 'continue' && firstError instanceof ApiError && firstError.status === 0; attempt += 1) {
+        const delayMs = MESSAGE_RETRY_DELAYS_MS[attempt]
+        if (delayMs === undefined) throw firstError
+        await wait(delayMs)
         const fresh = await refetch().catch(() => undefined)
         if (!fresh || deliveryPath(fresh.status) !== 'continue' || continuations(fresh) !== knownContinuations) {
           throw firstError

@@ -186,7 +186,7 @@ import type { Ok, OkJson } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
 import type { ResponseFormat } from 'hono/types'
 import type { AppType } from '@open-mercato/cezar/app-type'
-import { SID_HEADER, sid } from '@/lib/sid'
+import { SID_HEADER, sid, uuidv7 } from '@/lib/sid'
 import { noteFailedRequest } from '@/lib/failed-request'
 
 /**
@@ -1919,14 +1919,45 @@ export async function pushRun(id: string): Promise<GitPushResponse> {
   )
 }
 
+/** Waits between re-posts of a message that got no answer at all (status 0). */
+export const MESSAGE_RETRY_DELAYS_MS = [250, 750, 1_500] as const
+
+const delayMessageRetry = (delayMs: number) => new Promise<void>((resolve) => setTimeout(resolve, delayMs))
+
+/**
+ * Post one message, re-posting it while the server gives no answer (telemetry 1a212342, 29c3ba11:
+ * a remote cockpit's POST failing in ~2 ms on a socket its reverse proxy had already closed —
+ * browsers never retry a POST, and each failure retires only one of the pool's stale sockets).
+ * Every attempt carries the same `idempotencyKey`, so one that did land is never delivered twice.
+ */
+export async function postMessageWithRetry(
+  post: (json: MessageInput & { idempotencyKey: string }) => Promise<MessageResponse>,
+  message: MessageInput,
+  wait: (delayMs: number) => Promise<void> = delayMessageRetry,
+): Promise<MessageResponse> {
+  const json = { text: message.text ?? '', images: message.images ?? [], idempotencyKey: message.idempotencyKey ?? uuidv7() }
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await post(json)
+    } catch (error) {
+      const delayMs = MESSAGE_RETRY_DELAYS_MS[attempt]
+      if (!(error instanceof ApiError) || error.status !== 0 || delayMs === undefined) throw error
+      await wait(delayMs)
+    }
+  }
+}
+
 /** Deliver text and/or pasted screenshots into a run's live session. 409 once it has closed. */
 export async function sendMessage(id: string, message: MessageInput): Promise<MessageResponse> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
-      param: { projectId: queryScope(), id: encodeURIComponent(id) },
-      json: { text: message.text ?? '', images: message.images ?? [] },
-    }),
-    runPath(id, '/messages'),
+  return postMessageWithRetry(async (json) =>
+    unwrap(
+      await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
+        param: { projectId: queryScope(), id: encodeURIComponent(id) },
+        json,
+      }),
+      runPath(id, '/messages'),
+    ),
+    message,
   )
 }
 
@@ -1937,12 +1968,15 @@ export async function sendProjectRunMessage(
   id: string,
   message: MessageInput,
 ): Promise<MessageResponse> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
-      param: { projectId, id: encodeURIComponent(id) },
-      json: { text: message.text ?? '', images: message.images ?? [] },
-    }),
-    runPath(id, '/messages'),
+  return postMessageWithRetry(async (json) =>
+    unwrap(
+      await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
+        param: { projectId, id: encodeURIComponent(id) },
+        json,
+      }),
+      runPath(id, '/messages'),
+    ),
+    message,
   )
 }
 
