@@ -193,14 +193,14 @@ describe('useDeliverPrompt', () => {
     expect(client.getQueryData<ApiRun>(['default', 'runs', 'detail', 'r1'])?.status).toBe('running')
   })
 
-  it('a fresh record with no session to resume keeps the original error', async () => {
+  it('a fresh record with no session to resume explains the refusal instead of a bare "session closed"', async () => {
     const { sent, deliver } = await renderDeliver(run('running'), {
       'POST /api/v1/runs/r1/messages': () => jsonResponse({ error: 'session closed' }, 409),
       'GET /api/v1/runs/r1': () =>
         jsonResponse(run('failed', { steps: [{ id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0 }] as ApiRun['steps'] })),
     })
 
-    await expect(deliver('carry on')).rejects.toThrow('session closed')
+    await expect(deliver('carry on')).rejects.toThrow(/not taking messages right now/)
     expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(0)
   })
 
@@ -246,7 +246,7 @@ describe('useDeliverPrompt', () => {
     expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(0)
   })
 
-  it('the wait is bounded: a run that never settles reports the refusal', async () => {
+  it('the wait is bounded: a run that never settles reports an actionable refusal', async () => {
     const waits: number[] = []
     const { sent, deliver } = await renderDeliver(
       run('running'),
@@ -259,7 +259,7 @@ describe('useDeliverPrompt', () => {
       },
     )
 
-    await expect(deliver('carry on')).rejects.toThrow('session closed')
+    await expect(deliver('carry on')).rejects.toThrow(/not taking messages right now/)
     expect(waits).toEqual([...SESSION_GAP_RETRY_DELAYS_MS])
     expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(SESSION_GAP_RETRY_DELAYS_MS.length + 1)
     expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(0)

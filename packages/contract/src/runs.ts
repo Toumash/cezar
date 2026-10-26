@@ -689,8 +689,9 @@ export type AdoptPrResponse = z.infer<typeof adoptPrResponseSchema>;
 /**
  * `POST /runs/:id/messages` — one of three shapes (#472), by how far the run has got:
  * `delivered` (a live session took it), `queued` (still waiting for a slot, so it was stacked
- * onto the prompt and the stored entry rides along), `deferred` (mid-spawn, so it was buffered
- * and arrives as an ordinary follow-up turn once the session opens). Anything else is a 409.
+ * onto the prompt and the stored entry rides along), `deferred` (mid-spawn or between sessions,
+ * so it was buffered: it arrives as a follow-up turn once a session opens, else as a Continue once
+ * the run settles). Anything else is a 409.
  *
  * A union, not one object of optional flags: exactly one of the three keys is ever present, and
  * the flattened DTO shape admitted `{}`. Pre-#472 clients only ever saw `delivered`.

@@ -63,6 +63,16 @@ function isSessionClosed(error: unknown): error is ApiError {
   return error instanceof ApiError && error.status === 409 && error.message === 'session closed'
 }
 
+/** What the user reads when the live path still refuses after the wait: the server's bare
+ *  `session closed` says nothing about what to do next (1408d7cb). */
+export const SESSION_CLOSED_HINT =
+  'the agent is not taking messages right now — your message is back in the composer; send it again once the task settles'
+
+/** The refusal as the user should read it; any other error is passed through untouched. */
+function explained(error: ApiError): ApiError {
+  return isSessionClosed(error) ? new ApiError(409, SESSION_CLOSED_HINT, { cause: error }) : error
+}
+
 /** The record settles (review/done) BEFORE the engine drops the run — a Continue's turn-end autosave
  *  runs in between — so `/continue` refuses a run its own fresh record calls settled (77117b95). */
 function isStillUnwinding(error: unknown): error is ApiError {
@@ -132,14 +142,14 @@ export function useDeliverPrompt(
         } catch {
           // The refetch is the recovery, not the delivery: if it cannot answer, the user still
           // gets the server's own words about the send they made.
-          throw refusal
+          throw explained(refusal)
         }
         const path = deliveryPath(fresh.status)
         if (path === attempted) {
           // Only a transitional refusal is worth the wait; any other agreeing 409 is the server's
           // considered answer.
           const delayMs = isTransitional(attempted, refusal) ? SESSION_GAP_RETRY_DELAYS_MS[retry] : undefined
-          if (delayMs === undefined) throw refusal
+          if (delayMs === undefined) throw explained(refusal)
           await wait(delayMs)
           try {
             return await deliver(attempted)
@@ -159,7 +169,7 @@ export function useDeliverPrompt(
         // would answer its own 409, which would read as the new failure rather than the real one.
         // Judged on the FRESH record: `continueAction.available` was computed from the stale one,
         // which in this direction is precisely the record that says the run is still live.
-        if (path === 'continue' && lastSessionId(fresh) === undefined) throw refusal
+        if (path === 'continue' && lastSessionId(fresh) === undefined) throw explained(refusal)
         return await deliver(path)
       }
     },

@@ -2301,6 +2301,7 @@ export class RunManager {
   private abandonCancelledStart(runId: string): boolean {
     if (!this.cancelledStarting.delete(runId)) return false;
     this.starting.delete(runId);
+    this.redeliverDeferred(runId, true);
     this.reportSettledChildToParent(runId);
     this.releaseSlot();
     return true;
@@ -2391,6 +2392,38 @@ export class RunManager {
         this.store.appendEvent(runId, { type: 'lifecycle', message: `continue could not start — ${resumed.error}` });
       }
     }
+    this.redeliverDeferred(runId, state?.cancelled === true);
+  }
+
+  /**
+   * Messages `deferMessage` accepted for a session that never opened again: the run settled
+   * instead. Delivered the way the cockpit would have — stacked onto a re-queued prompt, else as
+   * a Continue — so an accepted message is never silently lost (telemetry 1408d7cb).
+   */
+  private redeliverDeferred(runId: string, cancelled: boolean): void {
+    // A continuation already owns the run: its session's open flushes the buffer.
+    if (this.active.has(runId) || this.starting.has(runId)) return;
+    const pending = this.deferredMessages.get(runId);
+    this.deferredMessages.delete(runId);
+    if (!pending?.length) return;
+    const undelivered = (reason: string): void => {
+      this.store.appendEvent(runId, {
+        type: 'lifecycle',
+        message: `${pending.length === 1 ? 'a message' : `${pending.length} messages`} sent while the session was closing could not be delivered — ${reason}`,
+      });
+    };
+    if (cancelled) return undelivered('the run was cancelled');
+    if (this.isQueued(runId)) {
+      for (const content of pending) this.enqueueMessage(runId, content);
+      return;
+    }
+    const blocks = pending.flat();
+    const text = blocks
+      .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
+      .map((b) => b.text)
+      .join('\n\n');
+    const resumed = this.continueRun(runId, { text, images: blocks.filter((b) => b.type !== 'text') });
+    if (!resumed.ok) undelivered(resumed.error ?? 'continue could not start');
   }
 
   /** Is this run settled and not owned by a session again (a Continue inside the grace)? */
@@ -3970,8 +4003,8 @@ export class RunManager {
    * backend, so there is nothing left to amend and no session to deliver into —
    * without this rung the message would 409, a genuinely dropped message in the
    * feature built to stop dropping them. Flushed as an ordinary follow-up turn
-   * the instant the session opens; dropped if the run never starts, which the
-   * existing error path already surfaces.
+   * the instant the session opens; a run that settles first resumes with it
+   * (`redeliverDeferred`).
    *
    * The buffer lives on the manager rather than the `ActiveRun` because the
    * `ActiveRun` does not exist yet for part of this window.
@@ -3984,7 +4017,12 @@ export class RunManager {
     // alone would reopen exactly the drop this rung exists to close.
     const state = this.active.get(runId);
     const startingUp = (this.starting.has(runId) && !this.cancelledStarting.has(runId)) || (state !== undefined && !state.sessionEverOpened && !state.cancelled);
-    if (!startingUp) return false;
+    // A session gap on a live owner — between workflow steps, or settling after the last turn
+    // (landing, review gate: well over ten seconds on a busy Windows host) while the record still
+    // says `running`. The next session's open flushes it; `dropActive` resumes with it otherwise
+    // (telemetry 1408d7cb).
+    const sessionGap = state !== undefined && !state.cancelled && !state.session?.open && !this.lifecycle.isBlocked(runId);
+    if (!startingUp && !sessionGap) return false;
     const pending = this.deferredMessages.get(runId) ?? [];
     pending.push(content);
     this.deferredMessages.set(runId, pending);

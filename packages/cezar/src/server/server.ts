@@ -5019,7 +5019,7 @@ export function createApp(deps: ServerDeps) {
       // than a status read here: the handler cannot observe the dequeue safely
       // (the record is written a tick later), the engine can.
       //   live session → delivered · still queued → folded into the prompt
-      //   starting up  → buffered  · anything else → 409, exactly as before
+      //   starting up or between sessions → buffered (1408d7cb) · anything else → 409
       if (manager.sendMessage(id, content)) return c.json({ delivered: true });
 
       const currentRun = store.getRun(id);
